@@ -1,9 +1,11 @@
-You will write a complete, runnable Python program using only Pygame and the Python standard library. The program must implement a simplified version of the classic "Asteroids" game with the following exact specifications. Do not use external assets, images, or third-party libraries.
+You will write a complete, runnable Python program using only Pygame and the Python standard library. The program must implement a version of the classic "Asteroids" game with the following specifications. Do not use external assets, images, or third-party libraries, other than Pygame.
 
 [CONSTRAINT 1] WINDOW & SETUP
 - Create a non-resizable 800x600 window using pygame.display.set_mode((800, 600))
 - Title: "Asteroids"
-- No sound or music. Graphics must be simple polygons drawn programmatically.
+- No sound or music are required.
+- Graphics consist mainly of polygons drawn programmatically.
+- The background should be a subtle starfield.
 
 [CONSTRAINT 2] SHIP PHYSICS & CONTROLS
 - Ship: elongated triangle, 20px wide, 30px tall, centered at start
@@ -15,9 +17,9 @@ You will write a complete, runnable Python program using only Pygame and the Pyt
 [CONSTRAINT 3] PROJECTILES
 - Space bar fires a projectile from the ship's tip
 - Projectile initial velocity = ship's current velocity + (6 px/frame) in ship's facing direction
-- Max 3 projectiles on screen at once. Ignore space presses if limit reached
-- Projectiles travel exactly 1000 px from spawn point, then disappear
-- Draw as small circles or squares
+- Max 3 projectiles on screen at once. Ignore space presses if limit reached.
+- Projectiles travel exactly 1000 px from spawn point, then disappear.
+- Draw as small circles or squares.
 - Due to screen wrap, a projectile might hit the player's own ship: Game Over. Display "FRIENDLY FIRE! - Press R to Restart"
 
 [CONSTRAINT 4] ASTEROIDS
@@ -35,19 +37,27 @@ You will write a complete, runnable Python program using only Pygame and the Pyt
 
 [CONSTRAINT 6] OUTPUT FORMAT
 - Output a single Python source file
-- Include inline comments starting with "# [CHECK]" that explicitly mark where each constraint is implemented
-- Do not include explanations, markdown outside the code block, or setup instructions
-- The code must run with `python game.py` assuming pygame is installed
+- The code must run with `python game.py`
+- Assume pygame is already installed
 
-[CONSTRAINT 7] CREATIVE BONUS FEATURE
-- Add ONE optional bonus feature of your choosing that enhances gameplay or presentation.
+[CONSTRAINT 7] GRAPHICS
+- Asteroids should have an irregular shape, not just simple circles
+- Asteroid splits should be displayed with an explosion with colourful particle effects
+- When the player applies thrust, a small red triangle should appear behind the ship as a visual representation of the thruster firing.
+
+[CONSTRAINT 8] CREATIVE BONUS FEATURE
+- Add ONE optional bonus feature of your choosing that enhances gameplay.
 - The feature must be togglable at runtime using the 'B' key (press once to enable, press again to disable).
 - It must not require external assets or additional dependencies.
-- The bonus feature is allowed to violate any of the other constraints.
+- The bonus feature should deliberately violate at least one of the other constraints.
 - Example bonus features: 
-  - gameplay changes: more than 3 projectiles at a time, collision detection between asteroids, disable screen wrapping, enemy ships that fire projectiles at the player, etc.
-  - presentation changes: better explosions with particle effects, add basic sound effects, etc.
-  - you are not limited to the examples above. These are just suggestions. Try to be creative, and make it fun!
+  - player can fire more than 3 projectiles at a time
+  - disable "friendly fire" damage
+  - enable collision detection between asteroids with same split rules
+  - disable screen wrapping (hard bounce when encountering a screen edge)
+  - add occasional enemy ships that fire projectiles at the player
+  - player's ship fires three projectiles at once in a 20 degree arc; no reload wait time
+- You are not limited to the examples above. These are just suggestions. Try to be creative, and make it fun!
 
 Begin implementation now.
 
