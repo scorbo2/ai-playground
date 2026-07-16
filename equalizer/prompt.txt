@@ -1,0 +1,45 @@
+# Assignment: Fullscreen Audio Visualizer
+
+Write a single Python file `equalizer.py` that creates a fullscreen media player with a real-time graphic equalizer overlay.
+
+## Input & Execution
+- Accept exactly two positional arguments: `<image_path>` (PNG/JPEG) and `<audio_path>` (MP3/WAV).
+- Support an optional flag: `--display <index>` (0-based) to select a specific monitor. Defaults to primary display.
+- Example: `python equalizer.py background.jpg track.mp3 --display 1`
+
+## Display Behavior
+- Start in fullscreen on the selected display at its native resolution.
+- Load the image and scale it uniformly to **cover** the screen (like CSS `object-fit: cover`). Maintain aspect ratio. Center the image; crop excess if needed.
+- Do not stretch or distort the image.
+
+## Audio Behavior
+- Begin playing audio immediately on startup.
+- Exit cleanly when the track finishes.
+- Pressing `ESC` at any time should stop playback and exit immediately.
+- Use `QMediaPlayer` for playback. Handle track completion via `mediaStatusChanged` or `positionChanged` signals.
+
+## Graphic Equalizer
+- Use `QAudioProbe` to capture raw PCM buffers during playback.
+- Convert buffers to `numpy` float32 arrays, apply a window function (e.g., Hann), compute FFT, and extract magnitude bins.
+- Render 16–32 vertical bars overlaid on the image. Bars should:
+  - React in real-time to audio energy
+  - Use smooth interpolation or decay to avoid jittery visuals
+  - Be styled with gradients, rounded caps, partial transparency, and/or glow effects for visual polish
+- Update visuals at 30–60 FPS using `QTimer` or signal-driven updates. Never block the UI thread.
+
+## Bonus Feature
+- Press `b` to toggle a fun secondary visual effect (defaults to off).
+- Ideas: audio-reactive particle system, subtle image glitch/displacement, gently falling rain or snow, or color-shifting overlays.
+- Keep it performant; the base EQ must remain smooth.
+
+## Technical Requirements
+- Single file only: `equalizer.py`
+- Use `argparse` for CLI parsing.
+- Handle missing files or invalid paths gracefully with a clear error message and exit code 1.
+- Ensure key events (`ESC`, `b`) work in fullscreen by setting appropriate focus policy and overriding `keyPressEvent`.
+- Include type hints, docstrings for major classes/functions, and concise comments.
+- Allowed dependencies: `PyQt6`, `numpy`, `ffmpeg-python` (optional, only if you need format conversion). You may add others if justified.
+
+## Output
+Write the code to `equalizer.py` in this directory and report completion to the user when finished.
+
