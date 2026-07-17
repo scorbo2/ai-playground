@@ -1,0 +1,67 @@
+# Assignment: Fullscreen Audio Visualizer
+
+Write a single Python file `equalizer.py` that creates a fullscreen media player with a real-time graphic equalizer overlay.
+
+## Input & Execution
+- Accept exactly two positional arguments: `<image_path>` (PNG/JPEG) and `<audio_path>` (MP3/WAV).
+- Support an optional flag: `--screen <index>` (0-based) to select a specific screen. Defaults to primary screen (0).
+- Example: `python equalizer.py background.jpg track.mp3 --screen 1`
+
+## Error handling
+- if the image and/or audio inputs can't be found or loaded, exit with a friendly error message.
+- if the requested screen is numerically out of range, just fall back to the primary screen (index 0) with a console warning
+
+## Display Behavior
+- Start in fullscreen on the selected display at its native resolution.
+- Load the image and scale it uniformly to **cover** the screen (like CSS `object-fit: cover`). Maintain aspect ratio. Center the image; crop excess if needed.
+- Do not stretch or distort the image.
+
+## Audio Behavior
+- Begin playing audio immediately on startup (a brief delay to allow for audio buffering is acceptable).
+- Exit cleanly when the track finishes.
+- Pressing `ESC` at any time should stop playback and exit immediately.
+
+## Graphic Equalizer
+- Do not use `QAudioProbe` - it was removed entirely in PyQt6.
+- Use `QMediaPlayer` for actual audio playback and for reporting playback
+  position (do not implement a second, independently-timed playback path).
+- Before playback starts, decode the full audio file to a PCM sample array
+  in memory (e.g. via `ffmpeg-python` or another decoding method of your
+  choice). This gives you random access to any point in the track.
+- On each visual update, use the player's *actual reported position* to
+  index into that pre-decoded sample array, extract a short window of
+  samples at that position, apply a window function (e.g. Hann), and run
+  an FFT to get magnitude bins.
+- Do not attempt to decode and analyze audio in real time from a separate
+  running stream — the analysis must be driven by where the player
+  actually is, not by a second decoder racing it.
+- Render 16-32 vertical bars overlaid on the image. Bars should:
+  - React in real-time to audio energy
+  - Use smooth interpolation or decay to avoid jittery visuals
+  - Be styled with gradients, rounded caps, partial transparency, and/or glow effects
+  - the bars should occupy the bottom third of the screen, with a small margin on each screen edge
+- Update visuals at 30-60 FPS using `QTimer` or signal-driven updates. Never block the UI thread.
+
+## Bonus Feature
+- Press `b` to toggle a fun secondary visual effect (defaults to off).
+- Ideas: 
+  - audio-reactive particle system, 
+  - subtle image glitch/displacement
+  - gently falling rain or snow
+  - color-shifting overlays
+- You are not limited to the above ideas. Make it creative and fun!
+- Keep it performant; the base EQ must remain smooth.
+
+## Technical Requirements
+- Single file only: `equalizer.py`
+- Use `argparse` for CLI parsing.
+- Handle missing files or invalid paths gracefully with a clear error message and exit code 1.
+- Ensure key events (`ESC`, `b`) work in fullscreen by setting appropriate focus policy and overriding `keyPressEvent`.
+- Include type hints, docstrings for major classes/functions, and concise comments.
+- Allowed dependencies: `PyQt6`, `numpy`, `ffmpeg-python` (optional, only if you need format conversion). You may add others if justified.
+
+## Output
+Write the code to `equalizer.py` in this directory and report completion to the user when finished.
+
+PyQt6, numpy, and ffmpeg-python are all installed on this system.
+
