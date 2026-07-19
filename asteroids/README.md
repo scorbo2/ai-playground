@@ -2,6 +2,8 @@
 
 This was used as the qualifying round challenge for LLM Battle 2.
 
+The prompt was [asteroids.txt](asteroids.txt)
+
 TODO: insert video link once it's up.
 
 ## Results
