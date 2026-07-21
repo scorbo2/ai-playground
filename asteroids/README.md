@@ -1,10 +1,8 @@
 # Asteroids challenge
 
-This was used as the qualifying round challenge for LLM Battle 2.
+This was used as the qualifying round challenge for [LLM Battle 2](https://www.youtube.com/watch?v=tbKB0YwzCnI).
 
 The prompt was [asteroids.txt](asteroids.txt)
-
-TODO: insert video link once it's up.
 
 ## Results
 

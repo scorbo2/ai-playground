@@ -1,10 +1,8 @@
 # Graphic equalizer challenge
 
-This was used as the final challenge for LLM Battle 2.
+This was used as the final challenge for [LLM Battle 2](https://www.youtube.com/watch?v=tbKB0YwzCnI).
 
 The prompt was [equalizer.txt](equalizer.txt)
-
-TODO: insert video link once it's up.
 
 ## Results
 
