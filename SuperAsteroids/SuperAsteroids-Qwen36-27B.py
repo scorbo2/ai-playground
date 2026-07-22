@@ -1996,6 +1996,7 @@ class Game:
                 # Asteroid is hit (split or destroy)
                 if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
                     self.hit_count += 1
+                    self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
                     self.asteroids.pop(ai)
                 else:
                     num_splits = random.randint(2, 3)
@@ -2003,6 +2004,9 @@ class Game:
                     new_speed = math.hypot(
                         asteroid.vx, asteroid.vy
                     ) * ASTEROID_SPLIT_SPEED_MULT
+
+                    # Spawn split explosion
+                    self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
 
                     self.asteroids.pop(ai)
                     for _ in range(num_splits):
