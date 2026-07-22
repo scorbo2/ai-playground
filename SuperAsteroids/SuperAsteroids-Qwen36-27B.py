@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stage 2: Ship Rendering + Physics
+SuperAsteroids — Stage 3: Asteroid Spawning + Movement
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
-Stage 2 adds the player ship with full physics: rotation, thrust, friction,
-screen wrapping, and the "Begin level N" fade-out text overlay.
+Stage 3 adds asteroids with irregular polygon shapes, tumbling rotation,
+random movement, screen wrapping, safe-zone spawning, and resize-aware
+forced wrapping.
 """
 
 import math
+import random
 import sys
 import pygame
 
@@ -60,6 +62,41 @@ SHIP_FRICTION = 0.98             # multiplier per frame when not thrusting
 
 # Level text fade
 LEVEL_TEXT_DURATION_FRAMES = 120  # 2 seconds at 60 FPS
+
+# ── Asteroid constants ──────────────────────────────────────────────────────
+
+# Asteroid sizes
+ASTEROID_LARGE_RADIUS = 40        # maximum asteroid radius (pixels)
+ASTEROID_SMALL_RADIUS = 15        # minimum asteroid radius before destruction
+ASTEROID_SPLIT_DIVISOR = 1.5      # radius divisor when splitting
+
+# Asteroid movement
+ASTEROID_MIN_SPEED = 1.5          # pixels per frame
+ASTEROID_MAX_SPEED = 2.5          # pixels per frame
+ASTEROID_SPEED_INCREMENT = 0.3    # speed increase per level
+
+# Asteroid tumbling (rotation)
+ASTEROID_LARGE_ROTATION_SPEED = 1    # degrees per frame (at LARGE_RADIUS)
+ASTEROID_SMALL_ROTATION_SPEED = 10   # degrees per frame (at SMALL_RADIUS)
+
+# Asteroid spawning
+ASTEROID_LEVEL1_COUNT = 5                 # starting asteroids on level 1
+ASTEROID_SPAWN_EXCLUSION_RADIUS = 200     # minimum distance from ship (pixels)
+ASTEROID_MIN_VERTICES = 8                 # minimum polygon vertices
+ASTEROID_MAX_VERTICES = 14                # maximum polygon vertices
+ASTEROID_RADIUS_VARIATION = 0.15          # ±15% radius variation per vertex
+
+# Asteroid fill colors (brown / beige palette)
+ASTEROID_FILL_COLORS = [
+    (139, 119, 101),   # brown
+    (160, 140, 120),   # warm gray-brown
+    (188, 170, 145),   # beige
+    (166, 148, 125),   # tan
+    (150, 130, 110),   # dark beige
+    (175, 155, 135),   # light brown
+    (145, 125, 105),   # medium brown
+    (190, 175, 155),   # pale beige
+]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -223,6 +260,192 @@ class Ship:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ASTEROID CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Asteroid:
+    """A tumbling, irregular polygon asteroid.
+
+    Each asteroid has a randomly generated irregular shape, a random brown/beige
+    fill color, and a white outline. It moves at a constant velocity and rotates
+    (tumbles) at a rate inversely proportional to its size.
+    """
+
+    def __init__(self, x, y, radius, speed, angle=None):
+        """Create a new asteroid.
+
+        Args:
+            x: Initial horizontal position.
+            y: Initial vertical position.
+            radius: Asteroid radius in pixels (affects shape and rotation speed).
+            speed: Movement speed in pixels per frame.
+            angle: Movement direction in degrees (0 = right, clockwise).
+                   If None, a random direction is chosen.
+        """
+        self.x = float(x)
+        self.y = float(y)
+        self.radius = float(radius)
+
+        # Movement
+        if angle is None:
+            angle = random.uniform(0, 360)
+        angle_rad = math.radians(angle)
+        self.vx = speed * math.cos(angle_rad)
+        self.vy = speed * math.sin(angle_rad)
+
+        # Tumbling rotation
+        self.angle = random.uniform(0, 360)
+        self.rotation_speed = self._compute_rotation_speed(radius)
+
+        # Shape: irregular polygon
+        self.fill_color = random.choice(ASTEROID_FILL_COLORS)
+        self.base_vertices = self._generate_shape(radius)
+
+    # ── Shape generation ─────────────────────────────────────────────────
+
+    def _generate_shape(self, radius):
+        """Generate an irregular polygon shape for this asteroid.
+
+        The shape is a perturbed circle: each vertex is placed at a random
+        angle with a radius that varies by ±ASTEROID_RADIUS_VARIATION.
+
+        Args:
+            radius: Base radius of the asteroid.
+
+        Returns:
+            List of (x, y) tuples representing the polygon vertices in local
+            coordinates (centered at origin).
+        """
+        num_vertices = random.randint(
+            ASTEROID_MIN_VERTICES, ASTEROID_MAX_VERTICES
+        )
+        vertices = []
+        for i in range(num_vertices):
+            theta = (2 * math.pi * i) / num_vertices + random.uniform(
+                -math.pi / num_vertices, math.pi / num_vertices
+            )
+            r = radius * (1 + random.uniform(
+                -ASTEROID_RADIUS_VARIATION, ASTEROID_RADIUS_VARIATION
+            ))
+            vertices.append((r * math.cos(theta), r * math.sin(theta)))
+        return vertices
+
+    # ── Rotation speed ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_rotation_speed(radius):
+        """Compute tumbling rotation speed based on asteroid radius.
+
+        Larger asteroids rotate slowly (1°/frame at radius 40), smaller ones
+        rotate faster (10°/frame at radius 15). Linear interpolation between
+        these two extremes.
+
+        Args:
+            radius: Asteroid radius in pixels.
+
+        Returns:
+            Rotation speed in degrees per frame.
+        """
+        if radius <= ASTEROID_SMALL_RADIUS:
+            return ASTEROID_SMALL_ROTATION_SPEED
+        if radius >= ASTEROID_LARGE_RADIUS:
+            return ASTEROID_LARGE_ROTATION_SPEED
+
+        # Linear interpolation
+        t = (ASTEROID_LARGE_RADIUS - radius) / (
+            ASTEROID_LARGE_RADIUS - ASTEROID_SMALL_RADIUS
+        )
+        return ASTEROID_LARGE_ROTATION_SPEED + t * (
+            ASTEROID_SMALL_ROTATION_SPEED - ASTEROID_LARGE_ROTATION_SPEED
+        )
+
+    # ── Update ───────────────────────────────────────────────────────────
+
+    def update(self, screen_width, screen_height):
+        """Update asteroid position and rotation.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+        """
+        # Move
+        self.x += self.vx
+        self.y += self.vy
+
+        # Tumble
+        self.angle += self.rotation_speed
+        self.angle = self.angle % 360
+
+        # Screen wrapping
+        self._wrap(screen_width, screen_height)
+
+    def _wrap(self, screen_width, screen_height):
+        """Wrap asteroid position to stay within screen boundaries.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+        """
+        # Account for asteroid radius when wrapping
+        if self.x < -self.radius:
+            self.x += screen_width + self.radius * 2
+        elif self.x > screen_width + self.radius:
+            self.x -= screen_width + self.radius * 2
+
+        if self.y < -self.radius:
+            self.y += screen_height + self.radius * 2
+        elif self.y > screen_height + self.radius:
+            self.y -= screen_height + self.radius * 2
+
+    def force_wrap(self, screen_width, screen_height):
+        """Force-wrap asteroid position if it's off-screen.
+
+        Used after window resizes to ensure asteroids reappear on-screen.
+        Unlike normal wrapping (which handles gradual movement past edges),
+        this uses modular arithmetic to snap the asteroid back into bounds.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+        """
+        self.x = self.x % screen_width
+        self.y = self.y % screen_height
+
+    # ── Drawing ──────────────────────────────────────────────────────────
+
+    def draw(self, screen):
+        """Render the asteroid as a rotated irregular polygon.
+
+        Args:
+            screen: The pygame Surface to draw on.
+        """
+        rotated = self._rotate_vertices(self.base_vertices)
+        points = [(self.x + vx, self.y + vy) for vx, vy in rotated]
+
+        pygame.draw.polygon(screen, self.fill_color, points)
+        pygame.draw.polygon(screen, COLOR_WHITE, points, width=1)
+
+    def _rotate_vertices(self, vertices):
+        """Rotate a list of (x, y) vertices around the origin.
+
+        Args:
+            vertices: List of (x, y) tuples in local coordinates.
+
+        Returns:
+            List of rotated (x, y) tuples.
+        """
+        angle_rad = math.radians(self.angle)
+        cos_a = math.cos(angle_rad)
+        sin_a = math.sin(angle_rad)
+        rotated = []
+        for vx, vy in vertices:
+            rx = vx * cos_a - vy * sin_a
+            ry = vx * sin_a + vy * cos_a
+            rotated.append((rx, ry))
+        return rotated
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GAME CLASS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -252,6 +475,9 @@ class Game:
 
         # Ship
         self.ship = Ship()
+
+        # Asteroids
+        self.asteroids = []
 
         # Level text fade
         self.level_text_timer = 0        # frames remaining for "Begin level N" text
@@ -323,6 +549,11 @@ class Game:
         self.window_width = max(self.window_width, MIN_WINDOW_WIDTH)
         self.window_height = max(self.window_height, MIN_WINDOW_HEIGHT)
 
+        # Force-wrap any asteroids that may have ended up off-screen
+        # due to the resize
+        for asteroid in self.asteroids:
+            asteroid.force_wrap(self.window_width, self.window_height)
+
     def _handle_keydown(self, key):
         """Route key presses to the appropriate handler based on current mode."""
         # F11 is global — toggles fullscreen from any mode
@@ -378,7 +609,7 @@ class Game:
     # ── Level management ─────────────────────────────────────────────────
 
     def _start_level(self, level_number):
-        """Initialize a new level: reset ship, set level, start text fade.
+        """Initialize a new level: reset ship, spawn asteroids, start text fade.
 
         Args:
             level_number: The 1-based level number to start.
@@ -389,8 +620,93 @@ class Game:
             self.window_width / 2,
             self.window_height / 2,
         )
+        self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
+
+    def _spawn_level_asteroids(self, level_number):
+        """Spawn asteroids for the given level.
+
+        Level 1 starts with ASTEROID_LEVEL1_COUNT large asteroids.
+        Each subsequent level adds 1-2 more asteroids and increases
+        their base speed by ASTEROID_SPEED_INCREMENT.
+
+        Args:
+            level_number: The 1-based level number.
+        """
+        self.asteroids.clear()
+
+        # Calculate asteroid count: level 1 = 5, each level adds 1-2
+        count = ASTEROID_LEVEL1_COUNT
+        for lvl in range(1, level_number):
+            count += random.randint(1, 2)
+
+        # Calculate base speed: level 1 = 1.5-2.5, each level adds 0.3
+        base_speed = (ASTEROID_MIN_SPEED + ASTEROID_MAX_SPEED) / 2
+        base_speed += (level_number - 1) * ASTEROID_SPEED_INCREMENT
+
+        for _ in range(count):
+            asteroid = self._spawn_single_asteroid(base_speed)
+            if asteroid is not None:
+                self.asteroids.append(asteroid)
+
+    def _spawn_single_asteroid(self, base_speed):
+        """Spawn a single large asteroid at a safe distance from the ship.
+
+        Tries up to 50 random positions. Falls back to a screen corner if
+        no safe position is found.
+
+        Args:
+            base_speed: Base speed for the asteroid.
+
+        Returns:
+            An Asteroid instance, or None if spawning failed entirely.
+        """
+        speed = base_speed + random.uniform(
+            -(ASTEROID_MAX_SPEED - ASTEROID_MIN_SPEED) / 2,
+            (ASTEROID_MAX_SPEED - ASTEROID_MIN_SPEED) / 2,
+        )
+        speed = max(ASTEROID_MIN_SPEED, speed)
+
+        # Try random positions first
+        for _ in range(50):
+            x = random.uniform(0, self.window_width)
+            y = random.uniform(0, self.window_height)
+            if self._is_safe_spawn_position(x, y):
+                return Asteroid(x, y, ASTEROID_LARGE_RADIUS, speed)
+
+        # Fallback: try screen corners
+        corners = [
+            (50, 50),
+            (self.window_width - 50, 50),
+            (50, self.window_height - 50),
+            (self.window_width - 50, self.window_height - 50),
+        ]
+        for cx, cy in corners:
+            if self._is_safe_spawn_position(cx, cy):
+                return Asteroid(cx, cy, ASTEROID_LARGE_RADIUS, speed)
+
+        # Last resort: pick any corner (even if not ideal)
+        cx, cy = random.choice(corners)
+        return Asteroid(cx, cy, ASTEROID_LARGE_RADIUS, speed)
+
+    def _is_safe_spawn_position(self, x, y):
+        """Check if a position is safe for asteroid spawning.
+
+        A position is safe if it's at least ASTEROID_SPAWN_EXCLUSION_RADIUS
+        pixels away from the player's ship.
+
+        Args:
+            x: Horizontal position to check.
+            y: Vertical position to check.
+
+        Returns:
+            True if the position is safe, False otherwise.
+        """
+        dx = x - self.ship.x
+        dy = y - self.ship.y
+        distance = math.hypot(dx, dy)
+        return distance >= ASTEROID_SPAWN_EXCLUSION_RADIUS
 
     # ── Fullscreen toggle ────────────────────────────────────────────────
 
@@ -435,6 +751,10 @@ class Game:
             self.window_height = self.screen.get_height()
             self.is_fullscreen = True
 
+        # After fullscreen toggle, force-wrap asteroids to new dimensions
+        for asteroid in self.asteroids:
+            asteroid.force_wrap(self.window_width, self.window_height)
+
     # ── Update ───────────────────────────────────────────────────────────
 
     def _update(self):
@@ -443,9 +763,15 @@ class Game:
             self._update_game()
 
     def _update_game(self):
-        """Update gameplay: ship physics and level text fade timer."""
+        """Update gameplay: ship physics, asteroids, and level text fade timer."""
         keys = pygame.key.get_pressed()
         self.ship.update(keys, self.window_width, self.window_height)
+
+        # Update all asteroids — but freeze them while the "Begin level N"
+        # text is fading, so they can't drift into the ship before it appears
+        if self.level_text_timer <= 0:
+            for asteroid in self.asteroids:
+                asteroid.update(self.window_width, self.window_height)
 
         # Decrement level text fade timer
         if self.level_text_timer > 0:
@@ -475,12 +801,17 @@ class Game:
         self._blit_centered(subtitle, vertical_ratio=0.6)
 
     def _draw_game_screen(self):
-        """Render the Game Mode: ship, level text overlay.
+        """Render the Game Mode: asteroids, ship, level text overlay.
 
         The ship is hidden while the 'Begin level N' text is fading in,
         so the player doesn't see the ship until the fade-out completes.
+        Asteroids are always drawn (they're visible during the fade).
         """
-        # Draw "Begin level N" fade-out text (always drawn first, on top)
+        # Draw all asteroids (always visible)
+        for asteroid in self.asteroids:
+            asteroid.draw(self.screen)
+
+        # Draw "Begin level N" fade-out text (always drawn on top)
         if self.level_text_timer > 0:
             self._draw_level_text()
         else:
