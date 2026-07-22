@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stages 1-7: Full Game with Cannon + Laser + Shield Weapons
+SuperAsteroids — Stages 1-8: Full Game with Weapons + Powerups
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
 Stage 1: Window setup, resize handling, F11 fullscreen, state machine.
@@ -10,6 +10,7 @@ Stage 4: Collision, asteroid splitting/destruction, hit counter, level progressi
 Stage 5: Cannon weapon with 3 power levels, projectile physics, friendly fire.
 Stage 6: Laser weapon with charge mechanics, screen-wrapping beam, L3 instant destroy.
 Stage 7: Shield weapon with charge mechanics, bounce physics, asteroid deflection.
+Stage 8: Powerup spawning, collection, weapon switching, HUD display.
 """
 
 import math
@@ -225,6 +226,117 @@ SHIELD_COLOR = COLOR_RED
 SHIELD_HUD_BAR_WIDTH = 150   # pixels
 SHIELD_HUD_BAR_HEIGHT = 12   # pixels
 SHIELD_HUD_BAR_BORDER = 1    # pixels
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POWERUP CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Powerup geometry
+POWERUP_RADIUS = 20           # pixels
+POWERUP_SPEED = 2             # pixels per frame (drift speed)
+
+# Powerup spawn interval
+POWERUP_SPAWN_INTERVAL_FRAMES = 1800  # 30 seconds at 60 FPS
+
+# Powerup types and colors
+POWERUP_CANNON = "C"
+POWERUP_LASER = "L"
+POWERUP_SHIELD = "S"
+
+POWERUP_CANNON_COLOR = COLOR_YELLOW
+POWERUP_LASER_COLOR = (100, 200, 255)  # light blue
+POWERUP_SHIELD_COLOR = COLOR_RED
+
+# HUD text colors (match weapon colors)
+HUD_CANNON_COLOR = COLOR_YELLOW
+HUD_LASER_COLOR = (100, 200, 255)     # light blue
+HUD_SHIELD_COLOR = COLOR_RED
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POWERUP CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Powerup:
+    """A collectible weapon powerup.
+
+    Rendered as a colored circle with a white letter label (C, L, or S).
+    Drifts at constant speed in a random direction. Only one powerup
+    can exist on screen at a time.
+    """
+
+    def __init__(self, x, y, powerup_type):
+        """Create a new powerup.
+
+        Args:
+            x: Initial horizontal position.
+            y: Initial vertical position.
+            powerup_type: One of POWERUP_CANNON, POWERUP_LASER, POWERUP_SHIELD.
+        """
+        self.x = float(x)
+        self.y = float(y)
+        self.powerup_type = powerup_type
+
+        # Movement: random direction at POWERUP_SPEED
+        angle = random.uniform(0, 360)
+        angle_rad = math.radians(angle)
+        self.vx = POWERUP_SPEED * math.cos(angle_rad)
+        self.vy = POWERUP_SPEED * math.sin(angle_rad)
+
+        # Color based on type
+        if self.powerup_type == POWERUP_CANNON:
+            self.color = POWERUP_CANNON_COLOR
+        elif self.powerup_type == POWERUP_LASER:
+            self.color = POWERUP_LASER_COLOR
+        else:  # POWERUP_SHIELD
+            self.color = POWERUP_SHIELD_COLOR
+
+    # ── Update ───────────────────────────────────────────────────────────
+
+    def update(self, screen_width, screen_height):
+        """Update powerup position and screen wrapping.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+        """
+        self.x += self.vx
+        self.y += self.vy
+        self._wrap(screen_width, screen_height)
+
+    def _wrap(self, screen_width, screen_height):
+        """Wrap powerup position to stay within screen boundaries."""
+        if self.x < -POWERUP_RADIUS:
+            self.x += screen_width + POWERUP_RADIUS * 2
+        elif self.x > screen_width + POWERUP_RADIUS:
+            self.x -= screen_width + POWERUP_RADIUS * 2
+
+        if self.y < -POWERUP_RADIUS:
+            self.y += screen_height + POWERUP_RADIUS * 2
+        elif self.y > screen_height + POWERUP_RADIUS:
+            self.y -= screen_height + POWERUP_RADIUS * 2
+
+    # ── Drawing ──────────────────────────────────────────────────────────
+
+    def draw(self, screen):
+        """Render the powerup as a colored circle with a letter label.
+
+        Args:
+            screen: The pygame Surface to draw on.
+        """
+        # Colored circle
+        pygame.draw.circle(screen, self.color,
+                           (int(self.x), int(self.y)),
+                           POWERUP_RADIUS)
+        pygame.draw.circle(screen, COLOR_WHITE,
+                           (int(self.x), int(self.y)),
+                           POWERUP_RADIUS, 1)
+
+        # White letter label
+        font = pygame.font.Font(None, 24)
+        text = font.render(self.powerup_type, True, COLOR_WHITE)
+        rect = text.get_rect(center=(int(self.x), int(self.y)))
+        screen.blit(text, rect)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -731,6 +843,10 @@ class Game:
         self.shield_active = False       # True while shield is currently active
         self.shield_hit_asteroids = set()  # Asteroids already bounced this frame
 
+        # Powerup state
+        self.powerup = None              # Current active powerup (or None)
+        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Frames until next powerup spawn
+
         # Hit counter (only destruction events, not splits)
         self.hit_count = 0
 
@@ -865,19 +981,6 @@ class Game:
                     self._activate_laser()
                 elif self.weapon_type == WEAPON_SHIELD:
                     self._activate_shield()
-        elif key == pygame.K_c:
-            # Temporary weapon switch: Cannon (replaced by powerups in Stage 8)
-            self.weapon_type = WEAPON_CANNON
-            self.laser_active = False
-        elif key == pygame.K_l:
-            # Temporary weapon switch: Laser (replaced by powerups in Stage 8)
-            self.weapon_type = WEAPON_LASER
-            self.laser_active = False
-            self.shield_active = False
-        elif key == pygame.K_s:
-            # Temporary weapon switch: Shield (replaced by powerups in Stage 8)
-            self.weapon_type = WEAPON_SHIELD
-            self.laser_active = False
 
     def _handle_pause_input(self, key):
         """Handle input while in Pause Mode."""
@@ -891,8 +994,8 @@ class Game:
     def _handle_gameover_input(self, key):
         """Handle input while in Game Over Mode."""
         if key == pygame.K_r:
-            # Restart from level 1
-            self._start_level(1)
+            # Restart from level 1, resetting all state
+            self._start_new_game()
         elif key == pygame.K_ESCAPE:
             # Return to Title Screen
             self.current_mode = MODE_TITLE
@@ -1491,6 +1594,195 @@ class Game:
             pygame.draw.rect(self.screen, SHIELD_COLOR, fill_rect,
                              border_radius=2)
 
+    # ── Powerup management ───────────────────────────────────────────────
+
+    def _try_spawn_powerup(self):
+        """Attempt to spawn a new powerup if the timer has expired.
+
+        Spawns a random weapon type powerup at a safe position (not on ship
+        or asteroids). Only one powerup can exist at a time.
+        """
+        if self.powerup is not None:
+            return  # Already have one on screen
+
+        self.powerup_spawn_timer -= 1
+        if self.powerup_spawn_timer > 0:
+            return  # Not time yet
+
+        # Timer expired — try to spawn
+        powerup_type = random.choice([
+            POWERUP_CANNON, POWERUP_LASER, POWERUP_SHIELD
+        ])
+
+        # Try random positions
+        for _ in range(50):
+            x = random.uniform(POWERUP_RADIUS,
+                               self.window_width - POWERUP_RADIUS)
+            y = random.uniform(POWERUP_RADIUS,
+                               self.window_height - POWERUP_RADIUS)
+            if self._is_safe_powerup_position(x, y):
+                self.powerup = Powerup(x, y, powerup_type)
+                self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
+                return
+
+        # Fallback: try corners
+        corners = [
+            (50, 50),
+            (self.window_width - 50, 50),
+            (50, self.window_height - 50),
+            (self.window_width - 50, self.window_height - 50),
+        ]
+        for cx, cy in corners:
+            if self._is_safe_powerup_position(cx, cy):
+                self.powerup = Powerup(cx, cy, powerup_type)
+                self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
+                return
+
+    def _is_safe_powerup_position(self, x, y):
+        """Check if a position is safe for powerup spawning.
+
+        A position is safe if it's not too close to the ship or any asteroid.
+
+        Args:
+            x: Horizontal position to check.
+            y: Vertical position to check.
+
+        Returns:
+            True if the position is safe, False otherwise.
+        """
+        # Check distance from ship
+        dx = x - self.ship.x
+        dy = y - self.ship.y
+        if math.hypot(dx, dy) < POWERUP_RADIUS + SHIP_RADIUS + 30:
+            return False
+
+        # Check distance from asteroids
+        for asteroid in self.asteroids:
+            dx = x - asteroid.x
+            dy = y - asteroid.y
+            if math.hypot(dx, dy) < POWERUP_RADIUS + asteroid.radius + 30:
+                return False
+
+        return True
+
+    def _check_ship_powerup_collision(self):
+        """Check if the ship has collected the active powerup.
+
+        If collected:
+        - Same weapon type → power level +1 (max 3)
+        - Different weapon type → switch to that type, power resets to 1
+        """
+        if self.powerup is None:
+            return
+
+        dx = self.ship.x - self.powerup.x
+        dy = self.ship.y - self.powerup.y
+        distance = math.hypot(dx, dy)
+
+        if distance < SHIP_RADIUS + POWERUP_RADIUS:
+            # Determine which weapon type this powerup represents
+            if self.powerup.powerup_type == POWERUP_CANNON:
+                new_weapon = WEAPON_CANNON
+            elif self.powerup.powerup_type == POWERUP_LASER:
+                new_weapon = WEAPON_LASER
+            else:  # POWERUP_SHIELD
+                new_weapon = WEAPON_SHIELD
+
+            if self.weapon_type == new_weapon:
+                # Same weapon type → upgrade power level
+                self.weapon_power = min(3, self.weapon_power + 1)
+            else:
+                # Different weapon type → switch and reset power
+                self.weapon_type = new_weapon
+                self.weapon_power = 1
+                # Deactivate other weapons
+                self.laser_active = False
+                self.shield_active = False
+
+            # Remove powerup
+            self.powerup = None
+
+    def _check_asteroid_powerup_collision(self):
+        """Check if any asteroid has collided with the active powerup.
+
+        If collision occurs:
+        - Powerup is destroyed
+        - Asteroid is split or destroyed following normal hit rules
+        """
+        if self.powerup is None:
+            return
+
+        for ai, asteroid in enumerate(self.asteroids):
+            dx = self.powerup.x - asteroid.x
+            dy = self.powerup.y - asteroid.y
+            distance = math.hypot(dx, dy)
+
+            if distance < POWERUP_RADIUS + asteroid.radius:
+                # Powerup destroyed
+                self.powerup = None
+
+                # Asteroid is hit (split or destroy)
+                if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
+                    self.hit_count += 1
+                    self.asteroids.pop(ai)
+                else:
+                    num_splits = random.randint(2, 3)
+                    new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
+                    new_speed = math.hypot(
+                        asteroid.vx, asteroid.vy
+                    ) * ASTEROID_SPLIT_SPEED_MULT
+
+                    self.asteroids.pop(ai)
+                    for _ in range(num_splits):
+                        angle = random.uniform(0, 360)
+                        self.asteroids.append(Asteroid(
+                            asteroid.x, asteroid.y,
+                            new_radius, new_speed, angle
+                        ))
+                return  # Only one collision per frame
+
+    def _draw_powerup(self):
+        """Render the active powerup if one exists."""
+        if self.powerup is not None:
+            self.powerup.draw(self.screen)
+
+    def _draw_hud(self):
+        """Render the complete HUD: weapon info and charge bars.
+
+        Displays:
+        - Weapon name in appropriate color
+        - Power level in matching color
+        - Charge bar (for laser or shield)
+        """
+        # Weapon info
+        if self.weapon_type == WEAPON_CANNON:
+            weapon_color = HUD_CANNON_COLOR
+        elif self.weapon_type == WEAPON_LASER:
+            weapon_color = HUD_LASER_COLOR
+        else:  # WEAPON_SHIELD
+            weapon_color = HUD_SHIELD_COLOR
+
+        margin = 10
+        font = pygame.font.Font(None, 24)
+
+        # Weapon name
+        weapon_text = font.render(
+            f"Weapon: {self.weapon_type}", True, weapon_color
+        )
+        self.screen.blit(weapon_text, (margin, margin))
+
+        # Power level
+        power_text = font.render(
+            f"Power: {self.weapon_power}", True, weapon_color
+        )
+        self.screen.blit(power_text, (margin, margin + 24))
+
+        # Charge bar (only for laser or shield)
+        if self.weapon_type == WEAPON_LASER:
+            self._draw_laser_charge_bar()
+        elif self.weapon_type == WEAPON_SHIELD:
+            self._draw_shield_charge_bar()
+
     # ── Level management ─────────────────────────────────────────────────
 
     def _start_level(self, level_number):
@@ -1511,6 +1803,8 @@ class Game:
         self.laser_hit_asteroids.clear()
         self.shield_active = False
         self.shield_hit_asteroids.clear()
+        self.powerup = None
+        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Reset spawn timer for new level
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
@@ -1526,6 +1820,8 @@ class Game:
         self.shield_charge = SHIELD_MAX_CHARGE
         self.shield_active = False
         self.shield_hit_asteroids.clear()
+        self.powerup = None
+        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
         self._start_level(1)
 
     def _spawn_level_asteroids(self, level_number):
@@ -1781,7 +2077,7 @@ class Game:
             self._update_game()
 
     def _update_game(self):
-        """Update gameplay: ship, asteroids, projectiles, laser, shield, collisions."""
+        """Update gameplay: ship, asteroids, projectiles, laser, shield, powerups."""
         keys = pygame.key.get_pressed()
         self.ship.update(keys, self.window_width, self.window_height)
 
@@ -1804,6 +2100,13 @@ class Game:
             # Update shield (charge drain/recharge, collision + bounce)
             self._update_shield(keys)
 
+            # Update powerup (drift, spawning, collision)
+            if self.powerup is not None:
+                self.powerup.update(self.window_width, self.window_height)
+
+            # Try to spawn a new powerup if timer has expired
+            self._try_spawn_powerup()
+
             # Collision detection
             # Note: ship-asteroid collision is skipped when shield is active,
             # since the shield handles those impacts
@@ -1812,6 +2115,8 @@ class Game:
             if self.current_mode == MODE_GAME:
                 self._check_projectile_asteroid_collisions()
                 self._check_projectile_ship_collisions()
+                self._check_ship_powerup_collision()
+                self._check_asteroid_powerup_collision()
                 self._check_level_complete()
 
         # Decrement level text fade timer
@@ -1842,7 +2147,7 @@ class Game:
         self._blit_centered(subtitle, vertical_ratio=0.6)
 
     def _draw_game_screen(self):
-        """Render the Game Mode: asteroids, ship, projectiles, laser, shield, HUD.
+        """Render the Game Mode: asteroids, ship, projectiles, laser, shield, powerups, HUD.
 
         The ship is hidden while the 'Begin level N' text is fading in,
         so the player doesn't see the ship until the fade-out completes.
@@ -1855,6 +2160,9 @@ class Game:
         # Draw all projectiles
         for projectile in self.projectiles:
             projectile.draw(self.screen)
+
+        # Draw powerup (always visible when present)
+        self._draw_powerup()
 
         # Draw "Begin level N" fade-out text (always drawn on top)
         if self.level_text_timer > 0:
@@ -1869,9 +2177,8 @@ class Game:
             # Draw shield (only when ship is visible)
             self._draw_shield()
 
-        # Draw HUD elements
-        self._draw_laser_charge_bar()
-        self._draw_shield_charge_bar()
+        # Draw complete HUD
+        self._draw_hud()
 
     def _draw_level_text(self):
         """Render the fading 'Begin level N' text overlay."""
