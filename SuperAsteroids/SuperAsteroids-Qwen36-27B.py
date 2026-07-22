@@ -1434,6 +1434,8 @@ class Game:
 
         best_hit = None       # (asteroid_index, distance along beam)
         best_distance = float('inf')
+        # Track closest powerup hit separately
+        best_powerup_distance = float('inf')
 
         for t in range(0, int(beam_length) + 1, SAMPLE_INTERVAL):
             # Sample point along beam, with screen wrapping
@@ -1459,7 +1461,25 @@ class Game:
                     best_hit = ai
                     best_distance = t
 
-        if best_hit is not None:
+            # Check if beam hits the active powerup
+            if self.powerup is not None:
+                pdx = sx - self.powerup.x
+                pdy = sy - self.powerup.y
+                # Account for screen wrapping in distance check
+                if abs(pdx) > self.window_width / 2:
+                    pdx -= math.copysign(self.window_width, pdx)
+                if abs(pdy) > self.window_height / 2:
+                    pdy -= math.copysign(self.window_height, pdy)
+
+                pdistance = math.hypot(pdx, pdy)
+                phit_threshold = POWERUP_RADIUS + beam_width / 2
+
+                if pdistance < phit_threshold and t < best_powerup_distance:
+                    best_powerup_distance = t
+
+        # Resolve the closest hit (asteroid or powerup)
+        if best_hit is not None and best_distance <= best_powerup_distance:
+            # Hit an asteroid
             asteroid = self.asteroids[best_hit]
             self.laser_hit_asteroids.add(best_hit)
 
@@ -1471,6 +1491,10 @@ class Game:
                 self._hit_asteroid_from_laser(asteroid, best_hit)
 
             # Beam deactivates after first hit
+            self._deactivate_laser()
+        elif best_powerup_distance < float('inf'):
+            # Hit the powerup — destroy it and deactivate beam
+            self.powerup = None
             self._deactivate_laser()
 
     def _destroy_asteroid(self, asteroid, asteroid_index):
@@ -1694,6 +1718,9 @@ class Game:
 
             # Check for asteroid collisions
             self._check_shield_asteroid_collisions()
+
+            # Check for powerup collisions
+            self._check_shield_powerup_collision()
         else:
             # Recharge when inactive and space bar is not held
             if not keys[pygame.K_SPACE]:
@@ -1750,6 +1777,28 @@ class Game:
                 # but be safe), stop processing
                 if self.current_mode != MODE_GAME:
                     return
+
+    def _check_shield_powerup_collision(self):
+        """Check if the active shield has collided with the powerup.
+
+        If a collision is detected, the powerup icon is destroyed.
+        The shield does not bounce off the powerup; it simply destroys it.
+        """
+        if not self.shield_active:
+            return
+        if self.powerup is None:
+            return
+
+        shield_radius, _, _, _, _ = self._get_shield_params()
+
+        dx = self.ship.x - self.powerup.x
+        dy = self.ship.y - self.powerup.y
+        distance = math.hypot(dx, dy)
+        hit_threshold = shield_radius + POWERUP_RADIUS
+
+        if distance < hit_threshold:
+            # Shield destroys the powerup on contact
+            self.powerup = None
 
     def _hit_asteroid_from_shield(self, asteroid, asteroid_index):
         """Handle an asteroid being hit by the shield.
@@ -2395,6 +2444,38 @@ class Game:
                 self.gameover_reason = "Friendly fire!"
                 return
 
+    def _check_projectile_powerup_collisions(self):
+        """Check if any projectile has hit the active powerup.
+
+        If a collision is detected, the projectile is removed and the
+        powerup icon is destroyed.
+        """
+        if self.powerup is None:
+            return
+
+        projectiles_to_remove = set()
+
+        for pi, projectile in enumerate(self.projectiles):
+            if pi in projectiles_to_remove:
+                continue
+
+            dx = projectile.x - self.powerup.x
+            dy = projectile.y - self.powerup.y
+            distance = math.hypot(dx, dy)
+
+            if distance < POWERUP_RADIUS:
+                # Hit! Remove projectile and destroy powerup
+                projectiles_to_remove.add(pi)
+                self.powerup = None
+                break  # Powerup is gone, no more collisions possible
+
+        # Remove hit projectiles
+        if projectiles_to_remove:
+            self.projectiles = [
+                p for i, p in enumerate(self.projectiles)
+                if i not in projectiles_to_remove
+            ]
+
     def _hit_asteroid(self, asteroid, asteroid_index, new_asteroids_list):
         """Handle an asteroid being hit by a projectile.
 
@@ -2540,6 +2621,7 @@ class Game:
             if self.current_mode == MODE_GAME:
                 self._check_projectile_asteroid_collisions()
                 self._check_projectile_ship_collisions()
+                self._check_projectile_powerup_collisions()
                 self._check_ship_powerup_collision()
                 self._check_asteroid_powerup_collision()
                 self._check_level_complete()
