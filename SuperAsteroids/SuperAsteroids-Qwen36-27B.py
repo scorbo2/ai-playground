@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stages 1-6: Full Game with Cannon + Laser Weapons
+SuperAsteroids — Stages 1-7: Full Game with Cannon + Laser + Shield Weapons
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
 Stage 1: Window setup, resize handling, F11 fullscreen, state machine.
@@ -9,6 +9,7 @@ Stage 3: Asteroid class, irregular polygons, tumbling, safe spawning.
 Stage 4: Collision, asteroid splitting/destruction, hit counter, level progression.
 Stage 5: Cannon weapon with 3 power levels, projectile physics, friendly fire.
 Stage 6: Laser weapon with charge mechanics, screen-wrapping beam, L3 instant destroy.
+Stage 7: Shield weapon with charge mechanics, bounce physics, asteroid deflection.
 """
 
 import math
@@ -180,6 +181,50 @@ LASER_L3_RECHARGE_RATE = 2
 LASER_HUD_BAR_WIDTH = 150   # pixels
 LASER_HUD_BAR_HEIGHT = 12   # pixels
 LASER_HUD_BAR_BORDER = 1    # pixels
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHIELD CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Weapon types
+WEAPON_SHIELD = "Shield"
+
+# Shield geometry per power level
+SHIELD_L1_RADIUS = 35       # pixels
+SHIELD_L1_BORDER = 1        # pixels wide border
+SHIELD_L1_BOUNCE_DIVISOR = 5   # bounce velocity = radius / 5
+
+SHIELD_L2_RADIUS = 35       # pixels (same as L1)
+SHIELD_L2_BORDER = 2        # pixels wide border
+SHIELD_L2_BOUNCE_DIVISOR = 8  # bounce velocity = radius / 8
+
+SHIELD_L3_RADIUS = 40       # pixels (larger)
+SHIELD_L3_BORDER = 3        # pixels wide border
+SHIELD_L3_BOUNCE_DIVISOR = 10  # bounce velocity = radius / 10
+
+# Shield charge mechanics
+SHIELD_MAX_CHARGE = 100
+SHIELD_MIN_CHARGE_TO_ACTIVATE = 20  # minimum charge needed to activate
+
+# Shield L1 charge rates
+SHIELD_L1_DRAIN_RATE = 5    # charge drained per frame while active
+SHIELD_L1_RECHARGE_RATE = 1  # charge recovered per frame when inactive
+
+# Shield L2 charge rates
+SHIELD_L2_DRAIN_RATE = 3
+SHIELD_L2_RECHARGE_RATE = 3
+
+# Shield L3 charge rates (same drain/recharge as L2 per spec)
+SHIELD_L3_DRAIN_RATE = 3
+SHIELD_L3_RECHARGE_RATE = 3
+
+# Shield color
+SHIELD_COLOR = COLOR_RED
+
+# HUD charge bar dimensions (shared with laser)
+SHIELD_HUD_BAR_WIDTH = 150   # pixels
+SHIELD_HUD_BAR_HEIGHT = 12   # pixels
+SHIELD_HUD_BAR_BORDER = 1    # pixels
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -681,6 +726,11 @@ class Game:
         self.laser_active = False        # True while beam is currently firing
         self.laser_hit_asteroids = set()  # Indices of asteroids already hit this burst
 
+        # Shield state
+        self.shield_charge = SHIELD_MAX_CHARGE
+        self.shield_active = False       # True while shield is currently active
+        self.shield_hit_asteroids = set()  # Asteroids already bounced this frame
+
         # Hit counter (only destruction events, not splits)
         self.hit_count = 0
 
@@ -813,6 +863,8 @@ class Game:
                     self._fire_cannon()
                 elif self.weapon_type == WEAPON_LASER:
                     self._activate_laser()
+                elif self.weapon_type == WEAPON_SHIELD:
+                    self._activate_shield()
         elif key == pygame.K_c:
             # Temporary weapon switch: Cannon (replaced by powerups in Stage 8)
             self.weapon_type = WEAPON_CANNON
@@ -820,6 +872,11 @@ class Game:
         elif key == pygame.K_l:
             # Temporary weapon switch: Laser (replaced by powerups in Stage 8)
             self.weapon_type = WEAPON_LASER
+            self.laser_active = False
+            self.shield_active = False
+        elif key == pygame.K_s:
+            # Temporary weapon switch: Shield (replaced by powerups in Stage 8)
+            self.weapon_type = WEAPON_SHIELD
             self.laser_active = False
 
     def _handle_pause_input(self, key):
@@ -1232,6 +1289,208 @@ class Game:
             pygame.draw.rect(self.screen, beam_color, fill_rect,
                              border_radius=2)
 
+    # ── Shield weapon ────────────────────────────────────────────────────
+
+    def _activate_shield(self):
+        """Attempt to activate the shield.
+
+        Only activates if the shield is not already active and there is
+        enough charge (>= SHIELD_MIN_CHARGE_TO_ACTIVATE).
+        """
+        if self.weapon_type != WEAPON_SHIELD:
+            return
+        if self.shield_active:
+            return
+        if self.shield_charge < SHIELD_MIN_CHARGE_TO_ACTIVATE:
+            return
+        self.shield_active = True
+        self.shield_hit_asteroids.clear()
+
+    def _get_shield_params(self):
+        """Get shield parameters for the current power level.
+
+        Returns:
+            Tuple of (radius, border_width, bounce_divisor, drain_rate,
+                      recharge_rate).
+        """
+        power = self.weapon_power
+        if power == 1:
+            return (
+                SHIELD_L1_RADIUS, SHIELD_L1_BORDER,
+                SHIELD_L1_BOUNCE_DIVISOR,
+                SHIELD_L1_DRAIN_RATE, SHIELD_L1_RECHARGE_RATE,
+            )
+        elif power == 2:
+            return (
+                SHIELD_L2_RADIUS, SHIELD_L2_BORDER,
+                SHIELD_L2_BOUNCE_DIVISOR,
+                SHIELD_L2_DRAIN_RATE, SHIELD_L2_RECHARGE_RATE,
+            )
+        else:  # power == 3
+            return (
+                SHIELD_L3_RADIUS, SHIELD_L3_BORDER,
+                SHIELD_L3_BOUNCE_DIVISOR,
+                SHIELD_L3_DRAIN_RATE, SHIELD_L3_RECHARGE_RATE,
+            )
+
+    def _update_shield(self, keys):
+        """Update shield charge, activation state, and collision detection.
+
+        Args:
+            keys: Result of pygame.key.get_pressed().
+        """
+        if self.weapon_type != WEAPON_SHIELD:
+            return
+
+        _, _, _, drain_rate, recharge_rate = self._get_shield_params()
+
+        if self.shield_active:
+            # Drain charge while shield is active
+            self.shield_charge -= drain_rate
+            self.shield_charge = max(0, self.shield_charge)
+
+            # Deactivate if charge dropped below minimum
+            if self.shield_charge < SHIELD_MIN_CHARGE_TO_ACTIVATE:
+                self.shield_active = False
+                self.shield_hit_asteroids.clear()
+                return
+
+            # Check for asteroid collisions
+            self._check_shield_asteroid_collisions()
+        else:
+            # Recharge when inactive and space bar is not held
+            if not keys[pygame.K_SPACE]:
+                self.shield_charge += recharge_rate
+                self.shield_charge = min(SHIELD_MAX_CHARGE, self.shield_charge)
+
+    def _check_shield_asteroid_collisions(self):
+        """Check if any asteroid has collided with the active shield.
+
+        On collision, the asteroid is split or destroyed using the normal
+        hit rules, and the ship's velocity is replaced by a bounce velocity
+        directed away from the asteroid.
+
+        Each asteroid can only trigger one bounce per frame to prevent
+        multiple asteroids from compounding the bounce effect.
+        """
+        if not self.shield_active:
+            return
+
+        shield_radius, _, bounce_divisor, _, _ = self._get_shield_params()
+        bounce_speed = shield_radius / bounce_divisor
+
+        for ai, asteroid in enumerate(self.asteroids):
+            if ai in self.shield_hit_asteroids:
+                continue
+
+            dx = self.ship.x - asteroid.x
+            dy = self.ship.y - asteroid.y
+            distance = math.hypot(dx, dy)
+            hit_threshold = shield_radius + asteroid.radius
+
+            if distance < hit_threshold:
+                # Collision! Mark asteroid as hit this frame
+                self.shield_hit_asteroids.add(ai)
+
+                # Bounce ship away from asteroid
+                if distance > 0:
+                    # Normalize direction away from asteroid
+                    nx = dx / distance
+                    ny = dy / distance
+                else:
+                    # Asteroid is exactly on ship — bounce in ship's facing direction
+                    facing_rad = math.radians(self.ship.angle - 90)
+                    nx = math.cos(facing_rad)
+                    ny = math.sin(facing_rad)
+
+                self.ship.vx = nx * bounce_speed
+                self.ship.vy = ny * bounce_speed
+
+                # Apply asteroid hit (split or destroy)
+                self._hit_asteroid_from_shield(asteroid, ai)
+
+                # If we're in game over mode (shouldn't happen with shield,
+                # but be safe), stop processing
+                if self.current_mode != MODE_GAME:
+                    return
+
+    def _hit_asteroid_from_shield(self, asteroid, asteroid_index):
+        """Handle an asteroid being hit by the shield.
+
+        If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
+        destroyed and the hit counter is incremented. Otherwise, it splits
+        into 2-3 smaller asteroids.
+
+        Args:
+            asteroid: The asteroid that was hit.
+            asteroid_index: Index of the asteroid in the asteroids list.
+        """
+        if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
+            # Destroy — count as a hit
+            self.hit_count += 1
+            self.asteroids.pop(asteroid_index)
+        else:
+            # Split into 2-3 smaller asteroids
+            num_splits = random.randint(2, 3)
+            new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
+            new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            # Remove the parent asteroid
+            self.asteroids.pop(asteroid_index)
+
+            # Create replacement asteroids
+            for _ in range(num_splits):
+                angle = random.uniform(0, 360)
+                self.asteroids.append(Asteroid(
+                    asteroid.x, asteroid.y, new_radius, new_speed, angle
+                ))
+
+    def _draw_shield(self):
+        """Render the shield as a red circle around the ship."""
+        if not self.shield_active:
+            return
+
+        shield_radius, border_width, _, _, _ = self._get_shield_params()
+        pygame.draw.circle(
+            self.screen, SHIELD_COLOR,
+            (int(self.ship.x), int(self.ship.y)),
+            shield_radius,
+            border_width,
+        )
+
+    def _draw_shield_charge_bar(self):
+        """Render the shield charge bar HUD element.
+
+        Drawn in the upper-right corner: red fill on dark gray background.
+        """
+        if self.weapon_type != WEAPON_SHIELD:
+            return
+
+        margin = 10
+        bar_x = self.window_width - SHIELD_HUD_BAR_WIDTH - margin
+        bar_y = margin
+
+        # Background (dark gray)
+        bg_rect = pygame.Rect(
+            bar_x - SHIELD_HUD_BAR_BORDER,
+            bar_y - SHIELD_HUD_BAR_BORDER,
+            SHIELD_HUD_BAR_WIDTH + SHIELD_HUD_BAR_BORDER * 2,
+            SHIELD_HUD_BAR_HEIGHT + SHIELD_HUD_BAR_BORDER * 2,
+        )
+        pygame.draw.rect(self.screen, (40, 40, 40), bg_rect,
+                         border_radius=3)
+
+        # Fill (red, proportional to charge)
+        fill_width = int(
+            SHIELD_HUD_BAR_WIDTH * (self.shield_charge / SHIELD_MAX_CHARGE)
+        )
+        if fill_width > 0:
+            fill_rect = pygame.Rect(
+                bar_x, bar_y, fill_width, SHIELD_HUD_BAR_HEIGHT
+            )
+            pygame.draw.rect(self.screen, SHIELD_COLOR, fill_rect,
+                             border_radius=2)
+
     # ── Level management ─────────────────────────────────────────────────
 
     def _start_level(self, level_number):
@@ -1250,6 +1509,8 @@ class Game:
         self.gameover_reason = ""
         self.laser_active = False
         self.laser_hit_asteroids.clear()
+        self.shield_active = False
+        self.shield_hit_asteroids.clear()
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
@@ -1262,6 +1523,9 @@ class Game:
         self.laser_charge = LASER_MAX_CHARGE
         self.laser_active = False
         self.laser_hit_asteroids.clear()
+        self.shield_charge = SHIELD_MAX_CHARGE
+        self.shield_active = False
+        self.shield_hit_asteroids.clear()
         self._start_level(1)
 
     def _spawn_level_asteroids(self, level_number):
@@ -1517,7 +1781,7 @@ class Game:
             self._update_game()
 
     def _update_game(self):
-        """Update gameplay: ship, asteroids, projectiles, laser, collisions."""
+        """Update gameplay: ship, asteroids, projectiles, laser, shield, collisions."""
         keys = pygame.key.get_pressed()
         self.ship.update(keys, self.window_width, self.window_height)
 
@@ -1537,8 +1801,14 @@ class Game:
             # Update laser (charge drain/recharge, collision detection)
             self._update_laser(keys)
 
+            # Update shield (charge drain/recharge, collision + bounce)
+            self._update_shield(keys)
+
             # Collision detection
-            self._check_ship_asteroid_collision()
+            # Note: ship-asteroid collision is skipped when shield is active,
+            # since the shield handles those impacts
+            if not self.shield_active:
+                self._check_ship_asteroid_collision()
             if self.current_mode == MODE_GAME:
                 self._check_projectile_asteroid_collisions()
                 self._check_projectile_ship_collisions()
@@ -1572,7 +1842,7 @@ class Game:
         self._blit_centered(subtitle, vertical_ratio=0.6)
 
     def _draw_game_screen(self):
-        """Render the Game Mode: asteroids, ship, projectiles, laser, HUD.
+        """Render the Game Mode: asteroids, ship, projectiles, laser, shield, HUD.
 
         The ship is hidden while the 'Begin level N' text is fading in,
         so the player doesn't see the ship until the fade-out completes.
@@ -1593,12 +1863,15 @@ class Game:
             # Ship only appears after the fade-out text has finished
             self.ship.draw(self.screen)
 
-        # Draw laser beam (only when ship is visible)
-        if self.level_text_timer <= 0:
+            # Draw laser beam (only when ship is visible)
             self._draw_laser_beam()
+
+            # Draw shield (only when ship is visible)
+            self._draw_shield()
 
         # Draw HUD elements
         self._draw_laser_charge_bar()
+        self._draw_shield_charge_bar()
 
     def _draw_level_text(self):
         """Render the fading 'Begin level N' text overlay."""
