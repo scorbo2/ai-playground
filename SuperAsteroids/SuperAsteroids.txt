@@ -80,7 +80,7 @@ Asteroids should have a white outline, and a randomly-chosen fill color in the b
 
 When an asteroid is hit by any player weapon, it splits into 2-3 smaller asteroids (radius = parent's radius / 1.5).
 Their speed is the parent asteroid's speed multiplied by 1.2, and their direction is completely random.
-If an asteroid with a radius smaller than 15 pixels is hit by any player weapon, it is destroyed -
+If an asteroid with a radius smaller than 20 pixels is hit by any player weapon, it is destroyed -
 do not split further.
 
 Asteroid splits are accompanied by a colorful particle explosion (bright yellow, red, and orange particles). 

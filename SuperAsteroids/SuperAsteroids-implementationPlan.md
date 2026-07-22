@@ -79,7 +79,7 @@
 - Asteroid hit logic:
   - Splits into 2–3 smaller asteroids (radius = parent / 1.5)
   - Split asteroids: speed × 1.2, random direction
-  - Asteroids < 15 px radius: destroyed (no further split)
+  - Asteroids < 20 px radius: destroyed (no further split)
 - Implement asteroid "hit" count persisted as levels advance.
   - Only asteroid destruction events count as a "hit" (splits don't count)
   - Restarting the game resets the hit count to 0
