@@ -1503,15 +1503,17 @@ class Game:
             self._deactivate_laser()
 
     def _destroy_asteroid(self, asteroid, asteroid_index):
-        """Destroy an asteroid completely (used by laser L3).
+        """Destroy an asteroid completely (used by laser L3 and shield L3).
 
-        Increments the hit counter. Does not produce split asteroids.
+        Spawns a destruction explosion, increments the hit counter, and
+        removes the asteroid. Does not produce split asteroids.
 
         Args:
             asteroid: The asteroid to destroy.
             asteroid_index: Index in the asteroids list.
         """
         self.hit_count += 1
+        self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
         self.asteroids.pop(asteroid_index)
 
     def _hit_asteroid_from_laser(self, asteroid, asteroid_index):
@@ -1775,8 +1777,11 @@ class Game:
                 self.ship.vx = nx * bounce_speed
                 self.ship.vy = ny * bounce_speed
 
-                # Apply asteroid hit (split or destroy)
-                self._hit_asteroid_from_shield(asteroid, ai)
+                # Apply asteroid hit (L3: instant destroy, L1/L2: split or destroy)
+                if self.weapon_power == 3:
+                    self._destroy_asteroid(asteroid, ai)
+                else:
+                    self._hit_asteroid_from_shield(asteroid, ai)
 
                 # If we're in game over mode (shouldn't happen with shield,
                 # but be safe), stop processing

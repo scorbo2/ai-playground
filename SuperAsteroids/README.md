@@ -32,6 +32,7 @@ TODO insert video link once it's up.
 A few things didn't sit right with me after playing the game:
 - added a game time indicator in the HUD
 - dynamically reduce the time between powerup spawns depending on levels (higher levels spawn powerups more frequently)
+- Ramming shield at level 3 should instantly destroy asteroids with no splitting, similar to the laser.
 
 ## Future ideas
 
