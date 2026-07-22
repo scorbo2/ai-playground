@@ -27,3 +27,15 @@ game was complete.
 
 TODO insert video link once it's up.
 
+## Post-completion changes
+
+A few things didn't sit right with me after playing the game:
+- added a game time indicator in the HUD
+- dynamically reduce the time between powerup spawns depending on levels (higher levels spawn powerups more frequently)
+
+## Future ideas
+
+- Asteroids should have a small chance of spawning a random powerup on destruction.
+- Once per level, an alien ship should appear and shoot projectiles at the player.
+- Sound effects would be nice.
+- Package up a downloadable installer to make it easier for non-python devs to grab and play.
