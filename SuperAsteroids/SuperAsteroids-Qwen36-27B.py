@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stages 4 & 5: Collision + Splitting + Level Progression + Cannon
+SuperAsteroids — Stages 1-6: Full Game with Cannon + Laser Weapons
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
-Stage 4 adds asteroid collision, splitting, destruction, hit counting,
-and level progression.
-Stage 5 adds the Cannon weapon with 3 power levels, projectile physics,
-and projectile-asteroid/ship collision.
+Stage 1: Window setup, resize handling, F11 fullscreen, state machine.
+Stage 2: Ship class, physics (rotation, thrust, friction, wrap).
+Stage 3: Asteroid class, irregular polygons, tumbling, safe spawning.
+Stage 4: Collision, asteroid splitting/destruction, hit counter, level progression.
+Stage 5: Cannon weapon with 3 power levels, projectile physics, friendly fire.
+Stage 6: Laser weapon with charge mechanics, screen-wrapping beam, L3 instant destroy.
 """
 
 import math
@@ -34,6 +36,7 @@ COLOR_LIGHT_GRAY = (192, 192, 192)
 COLOR_RED = (255, 0, 0)
 COLOR_YELLOW = (255, 255, 0)
 COLOR_ORANGE = (255, 165, 0)
+COLOR_GREEN = (0, 255, 0)
 
 # Game modes (state machine states)
 MODE_TITLE = "TITLE"
@@ -71,7 +74,8 @@ LEVEL_TEXT_DURATION_FRAMES = 120  # 2 seconds at 60 FPS
 
 # Asteroid sizes
 ASTEROID_LARGE_RADIUS = 40        # maximum asteroid radius (pixels)
-ASTEROID_SMALL_RADIUS = 15        # minimum asteroid radius before destruction
+ASTEROID_SMALL_RADIUS = 15        # minimum asteroid size range (for rotation speed)
+ASTEROID_DESTRUCTION_RADIUS = 20  # asteroids below this radius are destroyed, not split
 ASTEROID_SPLIT_DIVISOR = 1.5      # radius divisor when splitting
 
 # Asteroid movement
@@ -572,19 +576,13 @@ class Projectile:
         Returns:
             True if projectile is still alive, False if it should be removed.
         """
+        # Accumulate distance traveled this frame (cumulative, not displacement)
+        frame_distance = math.hypot(self.vx, self.vy)
+        self.distance_traveled += frame_distance
+
         # Move
         self.x += self.vx
         self.y += self.vy
-
-        # Track distance traveled (Euclidean from spawn point, accounting for wrap)
-        dx = self.x - self.spawn_x
-        dy = self.y - self.spawn_y
-        # Handle screen wrapping for distance calculation
-        if abs(dx) > screen_width / 2:
-            dx = dx - math.copysign(screen_width, dx)
-        if abs(dy) > screen_height / 2:
-            dy = dy - math.copysign(screen_height, dy)
-        self.distance_traveled = math.hypot(dx, dy)
 
         # Age
         self.age += 1
@@ -916,6 +914,324 @@ class Game:
         else:
             return CANNON_L3_MAX_FLIGHT
 
+    # ── Laser weapon ─────────────────────────────────────────────────────
+
+    def _activate_laser(self):
+        """Attempt to activate the laser beam.
+
+        Only activates if the laser is not already active and there is
+        enough charge (>= LASER_MIN_CHARGE_TO_ACTIVATE).
+        """
+        if self.weapon_type != WEAPON_LASER:
+            return
+        if self.laser_active:
+            return
+        if self.laser_charge < LASER_MIN_CHARGE_TO_ACTIVATE:
+            return
+        self.laser_active = True
+        self.laser_hit_asteroids.clear()
+
+    def _deactivate_laser(self):
+        """Deactivate the laser beam."""
+        self.laser_active = False
+        self.laser_hit_asteroids.clear()
+
+    def _get_laser_params(self):
+        """Get laser beam parameters for the current power level.
+
+        Returns:
+            Tuple of (width, length, color, drain_rate, recharge_rate).
+        """
+        power = self.weapon_power
+        if power == 1:
+            return (
+                LASER_L1_WIDTH, LASER_L1_LENGTH, LASER_L1_COLOR,
+                LASER_L1_DRAIN_RATE, LASER_L1_RECHARGE_RATE,
+            )
+        elif power == 2:
+            return (
+                LASER_L2_WIDTH, LASER_L2_LENGTH, LASER_L2_COLOR,
+                LASER_L2_DRAIN_RATE, LASER_L2_RECHARGE_RATE,
+            )
+        else:  # power == 3
+            return (
+                LASER_L3_WIDTH, LASER_L3_LENGTH, LASER_L3_COLOR,
+                LASER_L3_DRAIN_RATE, LASER_L3_RECHARGE_RATE,
+            )
+
+    def _update_laser(self, keys):
+        """Update laser charge, activation state, and collision detection.
+
+        Args:
+            keys: Result of pygame.key.get_pressed().
+        """
+        if self.weapon_type != WEAPON_LASER:
+            return
+
+        _, _, _, drain_rate, recharge_rate = self._get_laser_params()
+
+        if self.laser_active:
+            # Drain charge while beam is active
+            self.laser_charge -= drain_rate
+            self.laser_charge = max(0, self.laser_charge)
+
+            # Deactivate if charge dropped below minimum
+            if self.laser_charge < LASER_MIN_CHARGE_TO_ACTIVATE:
+                self._deactivate_laser()
+                return
+
+            # Check for asteroid collisions
+            self._check_lasteroid_collision()
+        else:
+            # Recharge when inactive and space bar is not held
+            if not keys[pygame.K_SPACE]:
+                self.laser_charge += recharge_rate
+                self.laser_charge = min(LASER_MAX_CHARGE, self.laser_charge)
+
+    def _check_lasteroid_collision(self):
+        """Check if the active laser beam has hit any asteroid.
+
+        Uses sampling along the beam line to detect collisions, with
+        screen wrapping awareness. On first hit, the asteroid is split
+        or destroyed (L3 destroys instantly regardless of size), and the
+        beam deactivates.
+        """
+        if not self.laser_active:
+            return
+
+        beam_width, beam_length, _, _, _ = self._get_laser_params()
+        tip_x, tip_y = self.ship.tip
+        facing_rad = math.radians(self.ship.angle - 90)
+        dx = math.cos(facing_rad)
+        dy = math.sin(facing_rad)
+
+        # Sampling interval: small enough to catch all collisions
+        SAMPLE_INTERVAL = 5  # pixels between samples
+
+        best_hit = None       # (asteroid_index, distance along beam)
+        best_distance = float('inf')
+
+        for t in range(0, int(beam_length) + 1, SAMPLE_INTERVAL):
+            # Sample point along beam, with screen wrapping
+            sx = (tip_x + dx * t) % self.window_width
+            sy = (tip_y + dy * t) % self.window_height
+
+            for ai, asteroid in enumerate(self.asteroids):
+                if ai in self.laser_hit_asteroids:
+                    continue
+
+                adx = sx - asteroid.x
+                ady = sy - asteroid.y
+                # Account for screen wrapping in distance check
+                if abs(adx) > self.window_width / 2:
+                    adx -= math.copysign(self.window_width, adx)
+                if abs(ady) > self.window_height / 2:
+                    ady -= math.copysign(self.window_height, ady)
+
+                distance = math.hypot(adx, ady)
+                hit_threshold = asteroid.radius + beam_width / 2
+
+                if distance < hit_threshold and t < best_distance:
+                    best_hit = ai
+                    best_distance = t
+
+        if best_hit is not None:
+            asteroid = self.asteroids[best_hit]
+            self.laser_hit_asteroids.add(best_hit)
+
+            if self.weapon_power == 3:
+                # L3: instant destroy, bypass split
+                self._destroy_asteroid(asteroid, best_hit)
+            else:
+                # L1/L2: normal split or destroy
+                self._hit_asteroid_from_laser(asteroid, best_hit)
+
+            # Beam deactivates after first hit
+            self._deactivate_laser()
+
+    def _destroy_asteroid(self, asteroid, asteroid_index):
+        """Destroy an asteroid completely (used by laser L3).
+
+        Increments the hit counter. Does not produce split asteroids.
+
+        Args:
+            asteroid: The asteroid to destroy.
+            asteroid_index: Index in the asteroids list.
+        """
+        self.hit_count += 1
+        self.asteroids.pop(asteroid_index)
+
+    def _hit_asteroid_from_laser(self, asteroid, asteroid_index):
+        """Handle an asteroid being hit by the laser (L1/L2 behavior).
+
+        If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
+        destroyed and the hit counter is incremented. Otherwise, it splits
+        into 2-3 smaller asteroids.
+
+        Args:
+            asteroid: The asteroid that was hit.
+            asteroid_index: Index of the asteroid in the asteroids list.
+        """
+        if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
+            # Destroy — count as a hit
+            self.hit_count += 1
+            self.asteroids.pop(asteroid_index)
+        else:
+            # Split into 2-3 smaller asteroids
+            num_splits = random.randint(2, 3)
+            new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
+            new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            # Remove the parent asteroid
+            self.asteroids.pop(asteroid_index)
+
+            # Create replacement asteroids
+            for _ in range(num_splits):
+                angle = random.uniform(0, 360)
+                self.asteroids.append(Asteroid(
+                    asteroid.x, asteroid.y, new_radius, new_speed, angle
+                ))
+
+    # ── Laser rendering ──────────────────────────────────────────────────
+
+    def _draw_laser_beam(self):
+        """Render the active laser beam from the ship's tip.
+
+        Handles screen wrapping by drawing multiple segments when the
+        beam crosses a screen edge.
+        """
+        if not self.laser_active:
+            return
+
+        beam_width, beam_length, beam_color, _, _ = self._get_laser_params()
+        tip_x, tip_y = self.ship.tip
+        facing_rad = math.radians(self.ship.angle - 90)
+        dx = math.cos(facing_rad)
+        dy = math.sin(facing_rad)
+
+        end_x = tip_x + dx * beam_length
+        end_y = tip_y + dy * beam_length
+
+        # Determine which edges the beam crosses (for wrapping)
+        wraps_x = (tip_x < 0) != (end_x < 0) or \
+                  (tip_x >= self.window_width) != (end_x >= self.window_width)
+        wraps_y = (tip_y < 0) != (end_y < 0) or \
+                  (tip_y >= self.window_height) != (end_y >= self.window_height)
+
+        # More precise wrapping detection: check if beam starts and ends
+        # on different sides of each screen edge
+        wraps_x = (
+            (0 < tip_x < self.window_width and
+             (end_x < 0 or end_x >= self.window_width)) or
+            (0 < end_x < self.window_width and
+             (tip_x < 0 or tip_x >= self.window_width))
+        )
+        wraps_y = (
+            (0 < tip_y < self.window_height and
+             (end_y < 0 or end_y >= self.window_height)) or
+            (0 < end_y < self.window_height and
+             (tip_y < 0 or tip_y >= self.window_height))
+        )
+
+        # Clamp endpoints for the primary segment
+        px1, py1 = tip_x, tip_y
+        px2, py2 = end_x, end_y
+
+        if not wraps_x and not wraps_y:
+            # Simple case: no wrapping
+            pygame.draw.line(self.screen, beam_color,
+                             (int(px1), int(py1)),
+                             (int(px2), int(py2)),
+                             max(beam_width, 1))
+        else:
+            # Beam crosses a screen edge — compute segment boundaries
+            if wraps_x:
+                # Determine which edge is crossed
+                if dx > 0:
+                    # Crossing right edge
+                    seg1_end_x = float(self.window_width)
+                    seg2_start_x = 0.0
+                else:
+                    # Crossing left edge
+                    seg1_end_x = 0.0
+                    seg2_start_x = float(self.window_width)
+
+                # Compute Y at the wrap boundary using line parametric equation
+                t1 = (seg1_end_x - tip_x) / dx if dx != 0 else 0
+                seg1_end_y = tip_y + dy * t1
+                t2 = (seg2_start_x - tip_x) / dx if dx != 0 else 0
+                seg2_end_y = tip_y + dy * t2
+
+                pygame.draw.line(self.screen, beam_color,
+                                 (int(tip_x), int(tip_y)),
+                                 (int(seg1_end_x), int(seg1_end_y)),
+                                 max(beam_width, 1))
+                pygame.draw.line(self.screen, beam_color,
+                                 (int(seg2_start_x), int(seg2_end_y % self.window_height)),
+                                 (int(end_x % self.window_width),
+                                  int(end_y % self.window_height)),
+                                 max(beam_width, 1))
+
+            if wraps_y:
+                # Determine which edge is crossed
+                if dy > 0:
+                    seg1_end_y = float(self.window_height)
+                    seg2_start_y = 0.0
+                else:
+                    seg1_end_y = 0.0
+                    seg2_start_y = float(self.window_height)
+
+                t1 = (seg1_end_y - tip_y) / dy if dy != 0 else 0
+                seg1_end_x = tip_x + dx * t1
+                t2 = (seg2_start_y - tip_y) / dy if dy != 0 else 0
+                seg2_end_x = tip_x + dx * t2
+
+                pygame.draw.line(self.screen, beam_color,
+                                 (int(tip_x), int(tip_y)),
+                                 (int(seg1_end_x % self.window_width),
+                                  int(seg1_end_y)),
+                                 max(beam_width, 1))
+                pygame.draw.line(self.screen, beam_color,
+                                 (int(seg2_end_x % self.window_width),
+                                  int(seg2_start_y)),
+                                 (int(end_x % self.window_width),
+                                  int(end_y % self.window_height)),
+                                 max(beam_width, 1))
+
+    def _draw_laser_charge_bar(self):
+        """Render the laser charge bar HUD element.
+
+        Drawn in the upper-right corner: light blue fill on dark gray background.
+        """
+        if self.weapon_type != WEAPON_LASER:
+            return
+
+        margin = 10
+        bar_x = self.window_width - LASER_HUD_BAR_WIDTH - margin
+        bar_y = margin
+
+        # Background (dark gray)
+        bg_rect = pygame.Rect(
+            bar_x - LASER_HUD_BAR_BORDER,
+            bar_y - LASER_HUD_BAR_BORDER,
+            LASER_HUD_BAR_WIDTH + LASER_HUD_BAR_BORDER * 2,
+            LASER_HUD_BAR_HEIGHT + LASER_HUD_BAR_BORDER * 2,
+        )
+        pygame.draw.rect(self.screen, (40, 40, 40), bg_rect,
+                         border_radius=3)
+
+        # Fill (light blue, proportional to charge)
+        fill_width = int(
+            LASER_HUD_BAR_WIDTH * (self.laser_charge / LASER_MAX_CHARGE)
+        )
+        if fill_width > 0:
+            fill_rect = pygame.Rect(
+                bar_x, bar_y, fill_width, LASER_HUD_BAR_HEIGHT
+            )
+            _, _, beam_color, _, _ = self._get_laser_params()
+            pygame.draw.rect(self.screen, beam_color, fill_rect,
+                             border_radius=2)
+
     # ── Level management ─────────────────────────────────────────────────
 
     def _start_level(self, level_number):
@@ -932,6 +1248,8 @@ class Game:
         )
         self.projectiles.clear()
         self.gameover_reason = ""
+        self.laser_active = False
+        self.laser_hit_asteroids.clear()
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
@@ -941,6 +1259,9 @@ class Game:
         self.hit_count = 0
         self.weapon_type = WEAPON_CANNON
         self.weapon_power = 1
+        self.laser_charge = LASER_MAX_CHARGE
+        self.laser_active = False
+        self.laser_hit_asteroids.clear()
         self._start_level(1)
 
     def _spawn_level_asteroids(self, level_number):
@@ -1109,16 +1430,16 @@ class Game:
     def _hit_asteroid(self, asteroid, asteroid_index, new_asteroids_list):
         """Handle an asteroid being hit by a projectile.
 
-        If the asteroid is smaller than ASTEROID_SMALL_RADIUS, it is destroyed
-        and the hit counter is incremented. Otherwise, it splits into 2-3
-        smaller asteroids.
+        If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
+        destroyed and the hit counter is incremented. Otherwise, it splits
+        into 2-3 smaller asteroids.
 
         Args:
             asteroid: The asteroid that was hit.
             asteroid_index: Index of the asteroid in the asteroids list.
             new_asteroids_list: List to append new asteroids to.
         """
-        if asteroid.radius < ASTEROID_SMALL_RADIUS:
+        if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
             # Destroy — count as a hit
             self.hit_count += 1
         else:
@@ -1196,7 +1517,7 @@ class Game:
             self._update_game()
 
     def _update_game(self):
-        """Update gameplay: ship, asteroids, projectiles, collisions."""
+        """Update gameplay: ship, asteroids, projectiles, laser, collisions."""
         keys = pygame.key.get_pressed()
         self.ship.update(keys, self.window_width, self.window_height)
 
@@ -1212,6 +1533,9 @@ class Game:
                 p for p in self.projectiles
                 if p.update(self.window_width, self.window_height)
             ]
+
+            # Update laser (charge drain/recharge, collision detection)
+            self._update_laser(keys)
 
             # Collision detection
             self._check_ship_asteroid_collision()
@@ -1248,7 +1572,7 @@ class Game:
         self._blit_centered(subtitle, vertical_ratio=0.6)
 
     def _draw_game_screen(self):
-        """Render the Game Mode: asteroids, ship, projectiles, level text overlay.
+        """Render the Game Mode: asteroids, ship, projectiles, laser, HUD.
 
         The ship is hidden while the 'Begin level N' text is fading in,
         so the player doesn't see the ship until the fade-out completes.
@@ -1268,6 +1592,13 @@ class Game:
         else:
             # Ship only appears after the fade-out text has finished
             self.ship.draw(self.screen)
+
+        # Draw laser beam (only when ship is visible)
+        if self.level_text_timer <= 0:
+            self._draw_laser_beam()
+
+        # Draw HUD elements
+        self._draw_laser_charge_bar()
 
     def _draw_level_text(self):
         """Render the fading 'Begin level N' text overlay."""
@@ -1302,8 +1633,8 @@ class Game:
 
         # Optional reason (e.g., "Friendly fire!")
         if self.gameover_reason:
-            reason = self._fonts["small"].render(
-                self.gameover_reason, True, COLOR_WHITE
+            reason = self._fonts["medium"].render(
+                self.gameover_reason, True, COLOR_GREEN
             )
 
         restart = self._fonts["small"].render("R to restart", True, COLOR_WHITE)
