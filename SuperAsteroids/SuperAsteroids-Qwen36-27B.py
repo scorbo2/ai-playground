@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stages 1-9: Full Game with Weapons, Powerups, and HUD
+SuperAsteroids — Full Game with Weapons, Powerups, and HUD
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
+Developed in stages:
 Stage 1: Window setup, resize handling, F11 fullscreen, state machine.
 Stage 2: Ship class, physics (rotation, thrust, friction, wrap).
 Stage 3: Asteroid class, irregular polygons, tumbling, safe spawning.
@@ -12,6 +13,7 @@ Stage 6: Laser weapon with charge mechanics, screen-wrapping beam, L3 instant de
 Stage 7: Shield weapon with charge mechanics, bounce physics, asteroid deflection.
 Stage 8: Powerup spawning, collection, weapon switching.
 Stage 9: Full HUD panel with rounded border, level/hits/weapon/charge display.
+Stage 10: Visual effects (thruster fire, explosion particles, twinkling starfield)
 """
 
 import math
@@ -52,6 +54,7 @@ MODE_GAMEOVER = "GAMEOVER"
 TEST_MODE_DELAY_MS = 100
 
 # Font sizes (None = default pygame font)
+FONT_SIZE_TITLE = 96
 FONT_SIZE_LARGE = 72
 FONT_SIZE_MEDIUM = 48
 FONT_SIZE_SMALL = 36
@@ -255,10 +258,10 @@ HUD_LASER_COLOR = (100, 200, 255)     # light blue
 HUD_SHIELD_COLOR = COLOR_RED
 
 # HUD panel (Stage 9: full HUD with border and background)
-HUD_BORDER_COLOR = COLOR_CYAN
+HUD_BACKGROUND_ALPHA = 153     # 60% opacity (0-255 scale)
+HUD_BORDER_COLOR = (0, 255, 255, HUD_BACKGROUND_ALPHA)  # 60% opaque cyan
 HUD_BORDER_WIDTH = 4
 HUD_BORDER_RADIUS = 8         # corner rounding in pixels
-HUD_BACKGROUND_ALPHA = 153     # 60% opacity (0-255 scale)
 HUD_MARGIN = 10               # margin from screen edges (upper-right)
 HUD_PADDING = 10              # internal padding inside the panel
 HUD_FONT_SIZE = 24            # font size for HUD text
@@ -266,6 +269,185 @@ HUD_LINE_SPACING = 24         # vertical spacing between HUD lines
 HUD_CHARGE_BAR_WIDTH = 150    # width of charge bar within HUD
 HUD_CHARGE_BAR_HEIGHT = 12    # height of charge bar
 HUD_CHARGE_BAR_GAP = 6        # gap between "Charge:" label and bar
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE 10: COSMETIC EFFECTS CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Starfield
+STARFIELD_MIN_COUNT = 100     # minimum number of stars
+STARFIELD_MAX_COUNT = 200     # maximum number of stars
+STAR_TWINKLE_RATE_MIN = 0.015 # minimum twinkle speed (1.5% of 0-255 range)
+STAR_TWINKLE_RATE_MAX = 0.04  # maximum twinkle speed (4% of 0-255 range)
+STAR_MIN_BRIGHTNESS = 0       # black
+STAR_MAX_BRIGHTNESS = 255     # pure white
+
+# Thruster exhaust particles
+THRUSTER_PARTICLE_RADIUS_MIN = 3   # pixels
+THRUSTER_PARTICLE_RADIUS_MAX = 8   # pixels
+THRUSTER_ALPHA_DECAY = 0.05        # 5% per frame
+THRUSTER_BASE_SPEED_MIN = 6        # px/frame opposite to ship facing
+THRUSTER_BASE_SPEED_MAX = 10       # px/frame opposite to ship facing
+THRUSTER_ARC_SPREAD = 10           # ±10 degrees from opposite direction
+THRUSTER_EMIT_RATE = 3             # particles per frame when thrusting
+THRUSTER_COLORS = [
+    COLOR_YELLOW,   # (255, 255, 0)
+    COLOR_ORANGE,   # (255, 165, 0)
+    COLOR_RED,      # (255, 0, 0)
+]
+
+# Explosion particles
+EXPLOSION_COUNT_MULTIPLIER = 3       # count = radius * 3
+EXPLOSION_VELOCITY_MIN = 5           # px/frame
+EXPLOSION_VELOCITY_MAX = 15          # px/frame
+EXPLOSION_ALPHA_DECAY_MIN = 0.03     # 3% per frame
+EXPLOSION_ALPHA_DECAY_MAX = 0.10     # 10% per frame
+EXPLOSION_SPLIT_COLORS = [           # colorful for splits
+    COLOR_YELLOW,
+    COLOR_RED,
+    COLOR_ORANGE,
+]
+EXPLOSION_DESTRUCTION_COLOR = (128, 128, 128)  # gray for destructions
+
+# Title screen asteroids
+TITLE_ASTEROID_MIN = 2
+TITLE_ASTEROID_MAX = 5
+TITLE_ASTEROID_SPEED = 0.5           # gentle drift speed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAR CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Star:
+    """A single twinkling star for the background starfield.
+
+    Rendered as a single pixel with grayscale color. Brightness oscillates
+    between black and white at a slow rate, creating a twinkle effect.
+    """
+
+    def __init__(self, x, y):
+        """Create a new star at the given position.
+
+        Args:
+            x: Horizontal position in screen coordinates.
+            y: Vertical position in screen coordinates.
+        """
+        self.x = x
+        self.y = y
+        # Random initial brightness (0-255)
+        self.brightness = random.randint(
+            STAR_MIN_BRIGHTNESS, STAR_MAX_BRIGHTNESS
+        )
+        # Random twinkle direction: +1 (brightening) or -1 (dimming)
+        self.direction = random.choice([-1, 1])
+        # Per-star twinkle speed (2-6% of 0-255 range per frame)
+        self.twinkle_rate = random.uniform(
+            STAR_TWINKLE_RATE_MIN, STAR_TWINKLE_RATE_MAX
+        )
+
+    def update(self):
+        """Update star brightness with twinkle effect."""
+        self.brightness += int(self.twinkle_rate * 255) * self.direction
+        if self.brightness >= STAR_MAX_BRIGHTNESS:
+            self.brightness = STAR_MAX_BRIGHTNESS
+            self.direction = -1
+        elif self.brightness <= STAR_MIN_BRIGHTNESS:
+            self.brightness = STAR_MIN_BRIGHTNESS
+            self.direction = 1
+
+    def draw(self, screen):
+        """Render the star as a single grayscale pixel.
+
+        Args:
+            screen: The pygame Surface to draw on.
+        """
+        color = (self.brightness, self.brightness, self.brightness)
+        screen.set_at((self.x, self.y), color)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARTICLE CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Particle:
+    """A cosmetic particle for thruster exhaust or explosions.
+
+    Rendered as a colored circle with alpha transparency. Particles move
+    at constant velocity and fade out over time.
+    """
+
+    def __init__(self, x, y, vx, vy, color, radius, alpha_decay):
+        """Create a new particle.
+
+        Args:
+            x: Initial horizontal position.
+            y: Initial vertical position.
+            vx: Horizontal velocity in pixels per frame.
+            vy: Vertical velocity in pixels per frame.
+            color: RGB color tuple.
+            radius: Display radius in pixels.
+            alpha_decay: Alpha decay rate per frame (0.0 to 1.0).
+        """
+        self.x = float(x)
+        self.y = float(y)
+        self.vx = float(vx)
+        self.vy = float(vy)
+        self.color = color
+        self.radius = radius
+        self.alpha = 255.0
+        self.alpha_decay = alpha_decay
+        self.alive = True
+
+    def update(self, screen_width, screen_height):
+        """Update particle position and alpha.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+
+        Returns:
+            True if particle is still alive, False if faded out.
+        """
+        self.x += self.vx
+        self.y += self.vy
+
+        # Screen wrapping
+        if self.x < 0:
+            self.x += screen_width
+        elif self.x >= screen_width:
+            self.x -= screen_width
+        if self.y < 0:
+            self.y += screen_height
+        elif self.y >= screen_height:
+            self.y -= screen_height
+
+        # Alpha decay
+        self.alpha -= self.alpha_decay * 255
+        if self.alpha <= 0:
+            self.alpha = 0
+            self.alive = False
+
+        return self.alive
+
+    def draw(self, screen):
+        """Render the particle as a semi-transparent colored circle.
+
+        Args:
+            screen: The pygame Surface to draw on.
+        """
+        if not self.alive or self.alpha <= 0:
+            return
+        # Create a temporary surface for alpha blending
+        size = self.radius * 2 + 2
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        alpha_color = (
+            self.color[0], self.color[1], self.color[2],
+            int(self.alpha),
+        )
+        pygame.draw.circle(surf, alpha_color, (size // 2, size // 2),
+                           self.radius)
+        screen.blit(surf, (int(self.x) - size // 2, int(self.y) - size // 2))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -862,6 +1044,11 @@ class Game:
         self.powerup = None              # Current active powerup (or None)
         self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Frames until next powerup spawn
 
+        # Cosmetic effects (Stage 10)
+        self.stars = []                  # Starfield stars
+        self.particles = []              # Thruster/exhaust/explosion particles
+        self.title_asteroids = []        # Tumbling asteroids on title screen
+
         # Hit counter (only destruction events, not splits)
         self.hit_count = 0
 
@@ -883,6 +1070,10 @@ class Game:
         self._fonts = {}
         self._init_fonts()
 
+        # Cosmetic effects (initialized after window is created)
+        self._init_starfield()
+        self._init_title_asteroids()
+
     # ── Font management ──────────────────────────────────────────────────
 
     def _init_fonts(self):
@@ -890,6 +1081,61 @@ class Game:
         self._fonts["large"] = pygame.font.Font(None, FONT_SIZE_LARGE)
         self._fonts["medium"] = pygame.font.Font(None, FONT_SIZE_MEDIUM)
         self._fonts["small"] = pygame.font.Font(None, FONT_SIZE_SMALL)
+
+    # ── Starfield initialization ─────────────────────────────────────────
+
+    def _init_starfield(self):
+        """Initialize the starfield with random stars across the screen."""
+        self.stars = []
+        count = random.randint(STARFIELD_MIN_COUNT, STARFIELD_MAX_COUNT)
+        for _ in range(count):
+            x = random.randint(0, self.window_width - 1)
+            y = random.randint(0, self.window_height - 1)
+            self.stars.append(Star(x, y))
+
+    def _adjust_starfield(self):
+        """Adjust starfield to match current window dimensions after resize.
+
+        Removes stars outside the new bounds and adds stars if the window
+        grew, maintaining density even if this exceeds the 200-star limit.
+        """
+        # Remove stars that are now outside the window
+        self.stars = [
+            s for s in self.stars
+            if 0 <= s.x < self.window_width and 0 <= s.y < self.window_height
+        ]
+
+        # Calculate how many stars we should have based on current area
+        # Target density: ~150 stars per 800x600 area
+        target_area = INITIAL_WINDOW_WIDTH * INITIAL_WINDOW_HEIGHT
+        current_area = self.window_width * self.window_height
+        target_count = int(
+            random.randint(STARFIELD_MIN_COUNT, STARFIELD_MAX_COUNT)
+            * (current_area / target_area)
+        )
+
+        # Add stars if we need more to fill the expanded area
+        deficit = target_count - len(self.stars)
+        for _ in range(max(0, deficit)):
+            x = random.randint(0, self.window_width - 1)
+            y = random.randint(0, self.window_height - 1)
+            self.stars.append(Star(x, y))
+
+    def _init_title_asteroids(self):
+        """Initialize tumbling asteroids for the title screen."""
+        self.title_asteroids = []
+        count = random.randint(TITLE_ASTEROID_MIN, TITLE_ASTEROID_MAX)
+        for _ in range(count):
+            x = random.uniform(0, self.window_width)
+            y = random.uniform(0, self.window_height)
+            radius = random.uniform(20, ASTEROID_LARGE_RADIUS)
+            asteroid = Asteroid(x, y, radius, TITLE_ASTEROID_SPEED)
+            self.title_asteroids.append(asteroid)
+
+    def _update_title_asteroids(self):
+        """Update title screen asteroids' positions and rotation."""
+        for asteroid in self.title_asteroids:
+            asteroid.update(self.window_width, self.window_height)
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -947,6 +1193,9 @@ class Game:
         # due to the resize
         for asteroid in self.asteroids:
             asteroid.force_wrap(self.window_width, self.window_height)
+
+        # Adjust starfield to fill the new window dimensions
+        self._adjust_starfield()
 
     def _handle_keydown(self, key):
         """Route key presses to the appropriate handler based on current mode."""
@@ -1250,12 +1499,16 @@ class Game:
         if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
             # Destroy — count as a hit
             self.hit_count += 1
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
             num_splits = random.randint(2, 3)
             new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
             new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            # Spawn split explosion
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1512,12 +1765,16 @@ class Game:
         if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
             # Destroy — count as a hit
             self.hit_count += 1
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
             num_splits = random.randint(2, 3)
             new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
             new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            # Spawn split explosion
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1694,6 +1951,116 @@ class Game:
         if self.powerup is not None:
             self.powerup.draw(self.screen)
 
+    # ── Cosmetic effects (Stage 10) ──────────────────────────────────────
+
+    def _spawn_thruster_particles(self):
+        """Spawn thruster exhaust particles when ship is thrusting.
+
+        Particles are ejected from the ship's rear in the opposite direction
+        of the ship's facing, with a slight random spread.
+        """
+        if self.current_mode != MODE_GAME:
+            return
+
+        keys = pygame.key.get_pressed()
+        if not keys[pygame.K_UP]:
+            return
+
+        # Ship rear position (opposite of tip)
+        half_h = SHIP_HEIGHT / 2
+        facing_rad = math.radians(self.ship.angle - 90)
+        rear_x = self.ship.x - half_h * math.cos(facing_rad)
+        rear_y = self.ship.y - half_h * math.sin(facing_rad)
+
+        for _ in range(THRUSTER_EMIT_RATE):
+            # Random angle within ±10 degrees of opposite direction
+            angle_offset = random.uniform(
+                -math.radians(THRUSTER_ARC_SPREAD),
+                math.radians(THRUSTER_ARC_SPREAD),
+            )
+            particle_angle = facing_rad + math.pi + angle_offset
+
+            # Random speed between 6-10 px/frame
+            speed = random.uniform(
+                THRUSTER_BASE_SPEED_MIN, THRUSTER_BASE_SPEED_MAX
+            )
+            vx = self.ship.vx + speed * math.cos(particle_angle)
+            vy = self.ship.vy + speed * math.sin(particle_angle)
+
+            # Random radius and color
+            radius = random.randint(
+                THRUSTER_PARTICLE_RADIUS_MIN,
+                THRUSTER_PARTICLE_RADIUS_MAX,
+            )
+            color = random.choice(THRUSTER_COLORS)
+
+            self.particles.append(Particle(
+                rear_x, rear_y, vx, vy, color, radius, THRUSTER_ALPHA_DECAY
+            ))
+
+    def _spawn_explosion(self, x, y, radius, is_destruction):
+        """Spawn explosion particles at the given position.
+
+        Args:
+            x: Horizontal position of explosion center.
+            y: Vertical position of explosion center.
+            radius: Asteroid radius (used to determine particle count).
+            is_destruction: True for destruction (gray), False for split (colorful).
+        """
+        count = int(radius * EXPLOSION_COUNT_MULTIPLIER)
+        if count < 3:
+            count = 3
+
+        for _ in range(count):
+            # Random direction
+            angle = random.uniform(0, 360)
+            angle_rad = math.radians(angle)
+
+            # Random speed
+            speed = random.uniform(
+                EXPLOSION_VELOCITY_MIN, EXPLOSION_VELOCITY_MAX
+            )
+            vx = speed * math.cos(angle_rad)
+            vy = speed * math.sin(angle_rad)
+
+            # Color based on explosion type
+            if is_destruction:
+                color = EXPLOSION_DESTRUCTION_COLOR
+            else:
+                color = random.choice(EXPLOSION_SPLIT_COLORS)
+
+            # Random radius and alpha decay
+            radius = random.randint(2, 5)
+            alpha_decay = random.uniform(
+                EXPLOSION_ALPHA_DECAY_MIN, EXPLOSION_ALPHA_DECAY_MAX
+            )
+
+            self.particles.append(Particle(
+                x, y, vx, vy, color, radius, alpha_decay
+            ))
+
+    def _update_particles(self):
+        """Update all particles, removing dead ones."""
+        self.particles = [
+            p for p in self.particles
+            if p.update(self.window_width, self.window_height)
+        ]
+
+    def _draw_particles(self):
+        """Render all active particles."""
+        for particle in self.particles:
+            particle.draw(self.screen)
+
+    def _draw_starfield(self):
+        """Render the starfield background."""
+        for star in self.stars:
+            star.draw(self.screen)
+
+    def _update_starfield(self):
+        """Update star brightness (twinkle effect)."""
+        for star in self.stars:
+            star.update()
+
     def _draw_hud(self):
         """Render the complete HUD panel in the upper-right corner.
 
@@ -1738,7 +2105,7 @@ class Game:
 
         if has_charge:
             charge_label = font.render("Charge:", True, COLOR_WHITE)
-            charge_label_w = charge_label[0]
+            charge_label_w = charge_label.get_width()
             charge_total_w = charge_label_w + HUD_CHARGE_BAR_GAP + HUD_CHARGE_BAR_WIDTH
             if charge_total_w > max_width:
                 max_width = charge_total_w
@@ -1837,6 +2204,7 @@ class Game:
         self.shield_hit_asteroids.clear()
         self.powerup = None
         self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Reset spawn timer for new level
+        self.particles.clear()  # Clear particles for new level
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
@@ -1953,6 +2321,10 @@ class Game:
             distance = math.hypot(dx, dy)
             # Ship collision radius + asteroid radius
             if distance < SHIP_RADIUS + asteroid.radius:
+                # Spawn explosion at collision point
+                self._spawn_explosion(
+                    self.ship.x, self.ship.y, SHIP_RADIUS, True
+                )
                 self.current_mode = MODE_GAMEOVER
                 self.gameover_reason = ""
                 return True
@@ -2015,6 +2387,10 @@ class Game:
             distance = math.hypot(dx, dy)
 
             if distance < SHIP_RADIUS:
+                # Spawn explosion at collision point
+                self._spawn_explosion(
+                    self.ship.x, self.ship.y, SHIP_RADIUS, True
+                )
                 self.current_mode = MODE_GAMEOVER
                 self.gameover_reason = "Friendly fire!"
                 return
@@ -2034,11 +2410,15 @@ class Game:
         if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
             # Destroy — count as a hit
             self.hit_count += 1
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
         else:
             # Split into 2-3 smaller asteroids
             num_splits = random.randint(2, 3)
             new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
             new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            # Spawn split explosion
+            self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
 
             for _ in range(num_splits):
                 angle = random.uniform(0, 360)
@@ -2105,6 +2485,13 @@ class Game:
 
     def _update(self):
         """Update game state each frame."""
+        # Starfield updates in all modes
+        self._update_starfield()
+
+        # Title screen asteroids update on title screen
+        if self.current_mode == MODE_TITLE:
+            self._update_title_asteroids()
+
         if self.current_mode == MODE_GAME:
             self._update_game()
 
@@ -2131,6 +2518,12 @@ class Game:
 
             # Update shield (charge drain/recharge, collision + bounce)
             self._update_shield(keys)
+
+            # Spawn thruster exhaust particles
+            self._spawn_thruster_particles()
+
+            # Update all particles (thruster + explosions)
+            self._update_particles()
 
             # Update powerup (drift, spawning, collision)
             if self.powerup is not None:
@@ -2171,12 +2564,30 @@ class Game:
             self._draw_gameover_screen()
 
     def _draw_title_screen(self):
-        """Render the Title Screen placeholder."""
-        title = self._fonts["large"].render("Title Screen", True, COLOR_WHITE)
-        subtitle = self._fonts["small"].render("Press Enter / ESC", True, COLOR_WHITE)
+        """Render the Title Screen with starfield, asteroids, and polished text."""
+        # Draw starfield background
+        self._draw_starfield()
 
-        self._blit_centered(title, vertical_ratio=0.35)
-        self._blit_centered(subtitle, vertical_ratio=0.6)
+        # Draw tumbling asteroids
+        for asteroid in self.title_asteroids:
+            asteroid.draw(self.screen)
+
+        # Draw title text (extra-large font)
+        title_font = pygame.font.Font(None, FONT_SIZE_TITLE)
+        title = title_font.render("Super Asteroids", True, COLOR_WHITE)
+        self._blit_centered(title, vertical_ratio=0.25)
+
+        # Draw instructions
+        instructions = [
+            "Arrow Keys or WASD: Rotate and Thrust",
+            "Space: Shoot",
+            "ESC: Pause  |  F11: Fullscreen",
+            "",
+            "Press Enter to Start",
+        ]
+        for i, line in enumerate(instructions):
+            text = self._fonts["small"].render(line, True, COLOR_WHITE)
+            self._blit_centered(text, vertical_ratio=0.42 + i * 0.04)
 
     def _draw_game_screen(self):
         """Render the Game Mode: asteroids, ship, projectiles, laser, shield, powerups, HUD.
@@ -2185,6 +2596,9 @@ class Game:
         so the player doesn't see the ship until the fade-out completes.
         Asteroids are always drawn (they're visible during the fade).
         """
+        # Draw starfield background
+        self._draw_starfield()
+
         # Draw all asteroids (always visible)
         for asteroid in self.asteroids:
             asteroid.draw(self.screen)
@@ -2208,6 +2622,9 @@ class Game:
 
             # Draw shield (only when ship is visible)
             self._draw_shield()
+
+        # Draw particles (thruster + explosions) on top
+        self._draw_particles()
 
         # Draw complete HUD
         self._draw_hud()
