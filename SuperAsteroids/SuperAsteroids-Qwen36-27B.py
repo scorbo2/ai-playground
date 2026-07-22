@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stage 3: Asteroid Spawning + Movement
+SuperAsteroids — Stages 4 & 5: Collision + Splitting + Level Progression + Cannon
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
-Stage 3 adds asteroids with irregular polygon shapes, tumbling rotation,
-random movement, screen wrapping, safe-zone spawning, and resize-aware
-forced wrapping.
+Stage 4 adds asteroid collision, splitting, destruction, hit counting,
+and level progression.
+Stage 5 adds the Cannon weapon with 3 power levels, projectile physics,
+and projectile-asteroid/ship collision.
 """
 
 import math
@@ -30,6 +31,9 @@ TARGET_FPS = 60
 COLOR_BLACK = (0, 0, 0)
 COLOR_WHITE = (255, 255, 255)
 COLOR_LIGHT_GRAY = (192, 192, 192)
+COLOR_RED = (255, 0, 0)
+COLOR_YELLOW = (255, 255, 0)
+COLOR_ORANGE = (255, 165, 0)
 
 # Game modes (state machine states)
 MODE_TITLE = "TITLE"
@@ -74,6 +78,7 @@ ASTEROID_SPLIT_DIVISOR = 1.5      # radius divisor when splitting
 ASTEROID_MIN_SPEED = 1.5          # pixels per frame
 ASTEROID_MAX_SPEED = 2.5          # pixels per frame
 ASTEROID_SPEED_INCREMENT = 0.3    # speed increase per level
+ASTEROID_SPLIT_SPEED_MULT = 1.2   # speed multiplier when splitting
 
 # Asteroid tumbling (rotation)
 ASTEROID_LARGE_ROTATION_SPEED = 1    # degrees per frame (at LARGE_RADIUS)
@@ -97,6 +102,80 @@ ASTEROID_FILL_COLORS = [
     (145, 125, 105),   # medium brown
     (190, 175, 155),   # pale beige
 ]
+
+# ── Cannon constants ────────────────────────────────────────────────────────
+
+# Weapon types
+WEAPON_CANNON = "Cannon"
+
+# Cannon projectile speed (added to ship velocity in facing direction)
+CANNON_L1_SPEED = 6           # pixels per frame (L1 and L2)
+CANNON_L3_SPEED = 8           # pixels per frame (L3)
+
+# Cannon projectile travel distance
+CANNON_PROJECTILE_DISTANCE = 1000  # pixels before projectile expires
+
+# Cannon projectile sizes
+CANNON_L1_PROJECTILE_SIZE = 2       # pixels (L1 and L2: drawn as points)
+CANNON_L3_PROJECTILE_SIZE = 4       # pixels (L3: 4x4 square)
+
+# Cannon max projectiles in flight
+CANNON_L1_MAX_FLIGHT = 3            # L1
+CANNON_L2_MAX_FLIGHT = 9            # L2
+CANNON_L3_MAX_FLIGHT = float('inf') # L3: unlimited
+
+# Cannon L2 spread arc
+CANNON_L2_ARC = 20  # degrees total arc for 3-projectile spread
+
+# Cannon projectile colors
+CANNON_L1_COLOR = COLOR_YELLOW
+CANNON_L2_COLOR = COLOR_ORANGE
+CANNON_L3_COLOR = COLOR_WHITE
+
+# Projectile invulnerability (frames after spawn where projectile
+# cannot hit the player's own ship)
+PROJECTILE_INVULNERABLE_FRAMES = 10
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LASER CONSTANTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Weapon types
+WEAPON_LASER = "Laser"
+
+# Laser beam geometry per power level
+LASER_L1_WIDTH = 1        # pixels wide
+LASER_L1_LENGTH = 100     # pixels long
+LASER_L1_COLOR = (100, 200, 255)   # light blue
+
+LASER_L2_WIDTH = 2        # pixels wide
+LASER_L2_LENGTH = 125     # pixels long
+LASER_L2_COLOR = (100, 200, 255)   # light blue
+
+LASER_L3_WIDTH = 3        # pixels wide
+LASER_L3_LENGTH = 125     # pixels long (same as L2)
+LASER_L3_COLOR = COLOR_WHITE
+
+# Laser charge mechanics
+LASER_MAX_CHARGE = 100
+LASER_MIN_CHARGE_TO_ACTIVATE = 20   # minimum charge needed to fire
+
+# Laser L1 charge rates
+LASER_L1_DRAIN_RATE = 3     # charge drained per frame while active
+LASER_L1_RECHARGE_RATE = 1  # charge recovered per frame when inactive
+
+# Laser L2 charge rates
+LASER_L2_DRAIN_RATE = 2
+LASER_L2_RECHARGE_RATE = 2
+
+# Laser L3 charge rates (same drain/recharge as L2 per spec)
+LASER_L3_DRAIN_RATE = 2
+LASER_L3_RECHARGE_RATE = 2
+
+# HUD charge bar dimensions
+LASER_HUD_BAR_WIDTH = 150   # pixels
+LASER_HUD_BAR_HEIGHT = 12   # pixels
+LASER_HUD_BAR_BORDER = 1    # pixels
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -446,6 +525,119 @@ class Asteroid:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# PROJECTILE CLASS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Projectile:
+    """A cannon projectile fired from the player's ship.
+
+    Travels in a straight line at constant velocity. Expires after traveling
+    CANNON_PROJECTILE_DISTANCE pixels from its spawn point. Has a brief
+    invulnerability period after spawn to prevent hitting the player's ship.
+    """
+
+    def __init__(self, x, y, vx, vy, color, size):
+        """Create a new projectile.
+
+        Args:
+            x: Initial horizontal position.
+            y: Initial vertical position.
+            vx: Horizontal velocity in pixels per frame.
+            vy: Vertical velocity in pixels per frame.
+            color: RGB color tuple for rendering.
+            size: Display size in pixels (2 for L1/L2, 4 for L3).
+        """
+        self.x = float(x)
+        self.y = float(y)
+        self.vx = float(vx)
+        self.vy = float(vy)
+        self.color = color
+        self.size = size
+
+        # Tracking
+        self.spawn_x = float(x)
+        self.spawn_y = float(y)
+        self.distance_traveled = 0.0
+        self.age = 0  # frames since spawn (for invulnerability)
+
+    # ── Update ───────────────────────────────────────────────────────────
+
+    def update(self, screen_width, screen_height):
+        """Update projectile position and travel distance.
+
+        Args:
+            screen_width: Current window width in pixels.
+            screen_height: Current window height in pixels.
+
+        Returns:
+            True if projectile is still alive, False if it should be removed.
+        """
+        # Move
+        self.x += self.vx
+        self.y += self.vy
+
+        # Track distance traveled (Euclidean from spawn point, accounting for wrap)
+        dx = self.x - self.spawn_x
+        dy = self.y - self.spawn_y
+        # Handle screen wrapping for distance calculation
+        if abs(dx) > screen_width / 2:
+            dx = dx - math.copysign(screen_width, dx)
+        if abs(dy) > screen_height / 2:
+            dy = dy - math.copysign(screen_height, dy)
+        self.distance_traveled = math.hypot(dx, dy)
+
+        # Age
+        self.age += 1
+
+        # Screen wrapping
+        self._wrap(screen_width, screen_height)
+
+        # Check if projectile has traveled too far
+        return self.distance_traveled <= CANNON_PROJECTILE_DISTANCE
+
+    def _wrap(self, screen_width, screen_height):
+        """Wrap projectile position to stay within screen boundaries."""
+        if self.x < 0:
+            self.x += screen_width
+        elif self.x >= screen_width:
+            self.x -= screen_width
+
+        if self.y < 0:
+            self.y += screen_height
+        elif self.y >= screen_height:
+            self.y -= screen_height
+
+    @property
+    def is_invulnerable(self):
+        """True if the projectile is still in its invulnerability window.
+
+        During this period, the projectile cannot hit the player's own ship.
+        """
+        return self.age < PROJECTILE_INVULNERABLE_FRAMES
+
+    # ── Drawing ──────────────────────────────────────────────────────────
+
+    def draw(self, screen):
+        """Render the projectile on the given surface.
+
+        Args:
+            screen: The pygame Surface to draw on.
+        """
+        if self.size <= 2:
+            # L1/L2: draw as a small filled circle (2px diameter)
+            pygame.draw.circle(screen, self.color,
+                               (int(self.x), int(self.y)), 1)
+        else:
+            # L3: draw as a 4x4 square
+            rect = pygame.Rect(
+                int(self.x) - self.size // 2,
+                int(self.y) - self.size // 2,
+                self.size, self.size,
+            )
+            pygame.draw.rect(screen, self.color, rect)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # GAME CLASS
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -479,9 +671,30 @@ class Game:
         # Asteroids
         self.asteroids = []
 
+        # Projectiles (cannon)
+        self.projectiles = []
+
+        # Weapon state
+        self.weapon_type = WEAPON_CANNON
+        self.weapon_power = 1  # 1, 2, or 3
+
+        # Laser state
+        self.laser_charge = LASER_MAX_CHARGE
+        self.laser_active = False        # True while beam is currently firing
+        self.laser_hit_asteroids = set()  # Indices of asteroids already hit this burst
+
+        # Hit counter (only destruction events, not splits)
+        self.hit_count = 0
+
+        # Game over reason (for special messages like "Friendly fire!")
+        self.gameover_reason = ""
+
         # Level text fade
         self.level_text_timer = 0        # frames remaining for "Begin level N" text
         self.level_text_level = 1        # which level number to display
+
+        # Input state (for detecting key press vs hold)
+        self._space_was_pressed = False
 
         # Timing
         self.clock = pygame.time.Clock()
@@ -527,6 +740,8 @@ class Game:
 
             if event.type == pygame.KEYDOWN:
                 self._handle_keydown(event.key)
+            elif event.type == pygame.KEYUP:
+                self._handle_keyup(event.key)
 
         return True
 
@@ -570,6 +785,11 @@ class Game:
         elif self.current_mode == MODE_GAMEOVER:
             self._handle_gameover_input(key)
 
+    def _handle_keyup(self, key):
+        """Track key release events for press-vs-hold detection."""
+        if key == pygame.K_SPACE:
+            self._space_was_pressed = False
+
     # ── Mode-specific input handlers ─────────────────────────────────────
 
     def _handle_title_input(self, key):
@@ -587,6 +807,22 @@ class Game:
         if key == pygame.K_ESCAPE:
             # Pause the game
             self.current_mode = MODE_PAUSE
+        elif key == pygame.K_SPACE:
+            # Space bar: fire weapon (press only, not hold)
+            if not self._space_was_pressed:
+                self._space_was_pressed = True
+                if self.weapon_type == WEAPON_CANNON:
+                    self._fire_cannon()
+                elif self.weapon_type == WEAPON_LASER:
+                    self._activate_laser()
+        elif key == pygame.K_c:
+            # Temporary weapon switch: Cannon (replaced by powerups in Stage 8)
+            self.weapon_type = WEAPON_CANNON
+            self.laser_active = False
+        elif key == pygame.K_l:
+            # Temporary weapon switch: Laser (replaced by powerups in Stage 8)
+            self.weapon_type = WEAPON_LASER
+            self.laser_active = False
 
     def _handle_pause_input(self, key):
         """Handle input while in Pause Mode."""
@@ -606,6 +842,80 @@ class Game:
             # Return to Title Screen
             self.current_mode = MODE_TITLE
 
+    # ── Cannon weapon ────────────────────────────────────────────────────
+
+    def _fire_cannon(self):
+        """Fire cannon projectiles based on current weapon power level.
+
+        Level 1: 1 yellow projectile, max 3 in flight.
+        Level 2: 3 orange projectiles in 20° arc, max 9 in flight.
+        Level 3: 3 white 4x4 projectiles at 8 px/frame, unlimited in flight.
+        """
+        if self.weapon_type != WEAPON_CANNON:
+            return
+
+        power = self.weapon_power
+        max_flight = self._get_cannon_max_flight(power)
+
+        # Check if we can fire
+        if len(self.projectiles) >= max_flight:
+            return
+
+        tip_x, tip_y = self.ship.tip
+        facing_rad = math.radians(self.ship.angle - 90)
+
+        if power == 1:
+            # Single projectile
+            speed = CANNON_L1_SPEED
+            color = CANNON_L1_COLOR
+            size = CANNON_L1_PROJECTILE_SIZE
+            proj_vx = self.ship.vx + speed * math.cos(facing_rad)
+            proj_vy = self.ship.vy + speed * math.sin(facing_rad)
+            self.projectiles.append(Projectile(tip_x, tip_y, proj_vx, proj_vy,
+                                               color, size))
+
+        elif power == 2:
+            # Three projectiles in 20° arc
+            speed = CANNON_L1_SPEED
+            color = CANNON_L2_COLOR
+            size = CANNON_L1_PROJECTILE_SIZE
+            half_arc = CANNON_L2_ARC / 2  # 10°
+            for offset in [-half_arc, 0, half_arc]:
+                angle_rad = facing_rad + math.radians(offset)
+                proj_vx = self.ship.vx + speed * math.cos(angle_rad)
+                proj_vy = self.ship.vy + speed * math.sin(angle_rad)
+                self.projectiles.append(Projectile(tip_x, tip_y, proj_vx, proj_vy,
+                                                   color, size))
+
+        elif power == 3:
+            # Three white 4x4 projectiles at 8 px/frame
+            speed = CANNON_L3_SPEED
+            color = CANNON_L3_COLOR
+            size = CANNON_L3_PROJECTILE_SIZE
+            half_arc = CANNON_L2_ARC / 2  # 10°
+            for offset in [-half_arc, 0, half_arc]:
+                angle_rad = facing_rad + math.radians(offset)
+                proj_vx = self.ship.vx + speed * math.cos(angle_rad)
+                proj_vy = self.ship.vy + speed * math.sin(angle_rad)
+                self.projectiles.append(Projectile(tip_x, tip_y, proj_vx, proj_vy,
+                                                   color, size))
+
+    def _get_cannon_max_flight(self, power):
+        """Get max projectiles in flight for the given power level.
+
+        Args:
+            power: Weapon power level (1, 2, or 3).
+
+        Returns:
+            Maximum number of projectiles allowed in flight.
+        """
+        if power == 1:
+            return CANNON_L1_MAX_FLIGHT
+        elif power == 2:
+            return CANNON_L2_MAX_FLIGHT
+        else:
+            return CANNON_L3_MAX_FLIGHT
+
     # ── Level management ─────────────────────────────────────────────────
 
     def _start_level(self, level_number):
@@ -620,9 +930,18 @@ class Game:
             self.window_width / 2,
             self.window_height / 2,
         )
+        self.projectiles.clear()
+        self.gameover_reason = ""
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
         self.level_text_level = level_number
+
+    def _start_new_game(self):
+        """Start a completely new game from level 1, resetting all state."""
+        self.hit_count = 0
+        self.weapon_type = WEAPON_CANNON
+        self.weapon_power = 1
+        self._start_level(1)
 
     def _spawn_level_asteroids(self, level_number):
         """Spawn asteroids for the given level.
@@ -708,6 +1027,120 @@ class Game:
         distance = math.hypot(dx, dy)
         return distance >= ASTEROID_SPAWN_EXCLUSION_RADIUS
 
+    # ── Collision detection ──────────────────────────────────────────────
+
+    def _check_ship_asteroid_collision(self):
+        """Check if the ship has collided with any asteroid.
+
+        If a collision is detected, immediately transitions to Game Over mode.
+        """
+        for asteroid in self.asteroids:
+            dx = self.ship.x - asteroid.x
+            dy = self.ship.y - asteroid.y
+            distance = math.hypot(dx, dy)
+            # Ship collision radius + asteroid radius
+            if distance < SHIP_RADIUS + asteroid.radius:
+                self.current_mode = MODE_GAMEOVER
+                self.gameover_reason = ""
+                return True
+        return False
+
+    def _check_projectile_asteroid_collisions(self):
+        """Check all projectiles against all asteroids.
+
+        Handles asteroid splitting/destruction and projectile removal.
+        """
+        # Collect indices of projectiles to remove
+        projectiles_to_remove = set()
+        # Collect asteroids to remove and their replacements
+        asteroids_to_remove = set()
+        new_asteroids = []
+
+        for pi, projectile in enumerate(self.projectiles):
+            for ai, asteroid in enumerate(self.asteroids):
+                if pi in projectiles_to_remove or ai in asteroids_to_remove:
+                    continue
+
+                dx = projectile.x - asteroid.x
+                dy = projectile.y - asteroid.y
+                distance = math.hypot(dx, dy)
+
+                if distance < asteroid.radius:
+                    # Hit! Remove projectile
+                    projectiles_to_remove.add(pi)
+
+                    # Split or destroy asteroid
+                    self._hit_asteroid(asteroid, ai, new_asteroids)
+                    asteroids_to_remove.add(ai)
+
+        # Remove hit projectiles
+        self.projectiles = [
+            p for i, p in enumerate(self.projectiles)
+            if i not in projectiles_to_remove
+        ]
+
+        # Remove hit asteroids and add replacements
+        self.asteroids = [
+            a for i, a in enumerate(self.asteroids)
+            if i not in asteroids_to_remove
+        ]
+        self.asteroids.extend(new_asteroids)
+
+    def _check_projectile_ship_collisions(self):
+        """Check if any projectile has hit the player's own ship.
+
+        Only projectiles past their invulnerability window can hit the ship.
+        If a collision is detected, transitions to Game Over with
+        "Friendly fire!" message.
+        """
+        for projectile in self.projectiles:
+            if projectile.is_invulnerable:
+                continue
+
+            dx = projectile.x - self.ship.x
+            dy = projectile.y - self.ship.y
+            distance = math.hypot(dx, dy)
+
+            if distance < SHIP_RADIUS:
+                self.current_mode = MODE_GAMEOVER
+                self.gameover_reason = "Friendly fire!"
+                return
+
+    def _hit_asteroid(self, asteroid, asteroid_index, new_asteroids_list):
+        """Handle an asteroid being hit by a projectile.
+
+        If the asteroid is smaller than ASTEROID_SMALL_RADIUS, it is destroyed
+        and the hit counter is incremented. Otherwise, it splits into 2-3
+        smaller asteroids.
+
+        Args:
+            asteroid: The asteroid that was hit.
+            asteroid_index: Index of the asteroid in the asteroids list.
+            new_asteroids_list: List to append new asteroids to.
+        """
+        if asteroid.radius < ASTEROID_SMALL_RADIUS:
+            # Destroy — count as a hit
+            self.hit_count += 1
+        else:
+            # Split into 2-3 smaller asteroids
+            num_splits = random.randint(2, 3)
+            new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
+            new_speed = math.hypot(asteroid.vx, asteroid.vy) * ASTEROID_SPLIT_SPEED_MULT
+
+            for _ in range(num_splits):
+                angle = random.uniform(0, 360)
+                new_asteroids_list.append(Asteroid(
+                    asteroid.x, asteroid.y, new_radius, new_speed, angle
+                ))
+
+    def _check_level_complete(self):
+        """Check if all asteroids have been destroyed.
+
+        If so, advance to the next level.
+        """
+        if len(self.asteroids) == 0 and self.current_mode == MODE_GAME:
+            self._start_level(self.level + 1)
+
     # ── Fullscreen toggle ────────────────────────────────────────────────
 
     def _toggle_fullscreen(self):
@@ -763,7 +1196,7 @@ class Game:
             self._update_game()
 
     def _update_game(self):
-        """Update gameplay: ship physics, asteroids, and level text fade timer."""
+        """Update gameplay: ship, asteroids, projectiles, collisions."""
         keys = pygame.key.get_pressed()
         self.ship.update(keys, self.window_width, self.window_height)
 
@@ -772,6 +1205,20 @@ class Game:
         if self.level_text_timer <= 0:
             for asteroid in self.asteroids:
                 asteroid.update(self.window_width, self.window_height)
+
+        # Update projectiles (only after fade-out)
+        if self.level_text_timer <= 0:
+            self.projectiles = [
+                p for p in self.projectiles
+                if p.update(self.window_width, self.window_height)
+            ]
+
+            # Collision detection
+            self._check_ship_asteroid_collision()
+            if self.current_mode == MODE_GAME:
+                self._check_projectile_asteroid_collisions()
+                self._check_projectile_ship_collisions()
+                self._check_level_complete()
 
         # Decrement level text fade timer
         if self.level_text_timer > 0:
@@ -801,7 +1248,7 @@ class Game:
         self._blit_centered(subtitle, vertical_ratio=0.6)
 
     def _draw_game_screen(self):
-        """Render the Game Mode: asteroids, ship, level text overlay.
+        """Render the Game Mode: asteroids, ship, projectiles, level text overlay.
 
         The ship is hidden while the 'Begin level N' text is fading in,
         so the player doesn't see the ship until the fade-out completes.
@@ -810,6 +1257,10 @@ class Game:
         # Draw all asteroids (always visible)
         for asteroid in self.asteroids:
             asteroid.draw(self.screen)
+
+        # Draw all projectiles
+        for projectile in self.projectiles:
+            projectile.draw(self.screen)
 
         # Draw "Begin level N" fade-out text (always drawn on top)
         if self.level_text_timer > 0:
@@ -845,14 +1296,28 @@ class Game:
         self._blit_centered(exit_text, vertical_ratio=0.65)
 
     def _draw_gameover_screen(self):
-        """Render the Game Over placeholder."""
-        title = self._fonts["large"].render("GAME OVER", True, COLOR_WHITE)
+        """Render the Game Over screen."""
+        # "GAME OVER" in red
+        title = self._fonts["large"].render("GAME OVER", True, COLOR_RED)
+
+        # Optional reason (e.g., "Friendly fire!")
+        if self.gameover_reason:
+            reason = self._fonts["small"].render(
+                self.gameover_reason, True, COLOR_WHITE
+            )
+
         restart = self._fonts["small"].render("R to restart", True, COLOR_WHITE)
         exit_text = self._fonts["small"].render("ESC to exit", True, COLOR_WHITE)
 
-        self._blit_centered(title, vertical_ratio=0.3)
-        self._blit_centered(restart, vertical_ratio=0.55)
-        self._blit_centered(exit_text, vertical_ratio=0.65)
+        self._blit_centered(title, vertical_ratio=0.25)
+
+        if self.gameover_reason:
+            self._blit_centered(reason, vertical_ratio=0.42)
+            self._blit_centered(restart, vertical_ratio=0.55)
+            self._blit_centered(exit_text, vertical_ratio=0.65)
+        else:
+            self._blit_centered(restart, vertical_ratio=0.5)
+            self._blit_centered(exit_text, vertical_ratio=0.6)
 
     # ── Rendering helpers ────────────────────────────────────────────────
 
