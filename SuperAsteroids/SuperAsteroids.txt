@@ -1,0 +1,280 @@
+# Objective
+
+Produce a complete, runnable Python program using only `pygame-ce` and the Python standard library.
+The game is a derivative of the classic "Asteroids" arcade game, but with many improvements and
+enhancements described in this document.
+
+## Window and setup
+
+The game starts in a resizable 800x600 window. The window has a minimum size of 640x480, but no maximum size.
+There is no forced aspect ratio (that is, user can resize the window into a portrait shape or a landscape shape
+or a square shape, as long as the width is >= 640 and the height is >= 480).
+
+The `F11` key should act as a full-screen mode toggle. Entering full-screen mode should use the current display's
+native resolution to show the game on the entire display. Hitting `F11` again should return to a window with
+the same position and dimensions that were in effect before full-screen mode was activated.
+
+## Game modes
+
+The game has the following modes:
+- Title Screen (default mode). Shown when the game is first launched. Player can enter game mode or exit.
+- Game Mode. Player can play the game and advance through progressively difficult levels. Player can pause 
+  or return to the Title Screen at any time. Losing the game moves to Game Over mode.
+- Pause Mode. Can only be entered from game mode. The game in progress is frozen in place until the player
+  deactivates pause mode. Player can also exit the game from this mode.
+- Game Over Mode. The player has lost the game. Player can restart game mode from the beginning or exit
+  the game from this mode.
+- Test Mode. Activate via the `--test` command-line argument. For testing purposes only.
+
+### Title Screen Mode
+
+The name of the game ("SuperAsteroids", one word) should be displayed in large lettering, centered in the 
+upper half of the screen. The background should display a subtle starfield. A random number of asteroids
+(2-5) should be animated gently tumbling with screen wrap. Smaller text reading "Press Enter to start"
+should be centered below the title text.
+
+Hitting `Enter` begins Game mode at level 1. Hitting `ESC` exits the game immediately with 
+exit code 0 (normal termination).
+
+### Game Mode
+
+Game mode can be accessed from the Title screen by pressing `Enter`, or from Game Over mode by pressing `r`. 
+Game mode begins on level 1. 
+
+At the start of each level, the text "Begin level N" should appear in the center of the screen (where N is
+the current 1-based level number), then fade out. The player's ship appears in the center of the screen,
+and the game begins.
+
+#### Ship physics and controls
+
+The player's ship is represented as an elongated triangle, 20 pixels wide and 30 pixels tall. The ship has
+a white outline and a light gray fill. The ship initially points upwards and has a velocity of 0.
+
+Holding the left or right arrow keys rotates the ship continuously at 5 degrees per frame. 
+Releasing the left or right arrow key stops rotation immediately.
+
+Holding the up arrow key applies acceleration of 0.3 pixels per frame squared in the ship's facing direction.
+The ship has a maximum speed of 8 pixels per frame. When the up arrow key is released, apply linear friction
+of 0.98 per frame to slow the ship gradually back to 0.
+
+Screen wrapping is applied at all screen edges.
+
+Pressing the space bar activates the ship's weapon. See the "Weapons" section for details.
+
+#### Asteroids
+
+Level 1 begins with 5 large asteroids (radius 40 pixels) in random starting positions (but away from the 
+player's ship - fall back to any screen corner if no open starting location can be found. Never start an asteroid
+within 200 pixels of the player's ship). Asteroids have an initial randomly-chosen direction, and an initial
+randomly-chosen speed from 1.5 to 2.5 pixels/frame.
+
+Asteroids should have an irregular shape. They should NOT be simple circles. Asteroids should "tumble"
+(slowly rotate) as they move. Rotation rate should scale inversely with asteroid size. Larger asteroids rotate
+slowly, at 1 degree per frame. Smaller asteroids rotate more rapidly, at 10 degrees per frame.
+
+There is NO collision detection between asteroids - they simply pass through each other.
+
+Screen wrapping is applied at all screen edges.
+
+Asteroids should have a white outline, and a randomly-chosen fill color in the brown or beige range.
+
+When an asteroid is hit by any player weapon, it splits into 2-3 smaller asteroids (radius = parent's radius / 1.5).
+Their speed is the parent asteroid's speed multiplied by 1.2, and their direction is completely random.
+If an asteroid with a radius smaller than 15 pixels is hit by any player weapon, it is destroyed -
+do not split further.
+
+Asteroid splits are accompanied by a colorful particle explosion (bright yellow, red, and orange particles). 
+Asteroid destruction events are accompanied by a monochromatic particle explosion (plain gray particles). 
+The particles should spread out from the point where the collision occurred, and fade by gradually adjusting
+their alpha values until they are invisible. Particle velocity is random between 5 and 15 pixels per frame, 
+direction is random, and alpha adjustment should be random between 3% and 10% per frame. Particle count is
+the asteroid's radius * 3. For example, if a 40 pixel "large" asteroid is hit, it should spawn 40 * 3 = 120 
+particles.
+
+When all asteroids are destroyed, increment the current level by 1 and begin that new level. On each
+new level, the starting asteroid count increases by 1-2, and their starting base speed increases by 
+0.3 pixels/frame. The same asteroid split and destruction rules apply on all levels.
+
+If the player successfully destroys all asteroids, the current level ends and the next level begins automatically.
+This does not exit Game Mode. There is no "last level" - Game Mode continues until the player returns to the
+Title Screen or is defeated.
+
+If the player's ship collides with an asteroid of any radius, or with any weapon (even the player's own weapons, 
+which can happen due to screen wrapping), switch immediately to Game Over mode.
+
+### Pause Mode
+
+During game mode, the player can hit the `ESC` key at any time to temporarily suspend Game Mode and enter
+Pause Mode. Display "PAUSE" in large white letters in the center of the screen. Underneath that, on separate
+lines, display the smaller text "Press ESC to resume" and "Press X to exit".
+
+Pressing `ESC` in Pause Mode returns to Game Mode.
+
+Pressing `x` in Pause Mode abandons the current game and returns to Title Screen Mode.
+
+### Game Over Mode
+
+All animation stops. Display the text "GAME OVER" in red in the center of the screen. Directly beneath that text,
+display "Press R to restart" and "Press ESC to exit" in smaller white text.
+
+Pressing `r` returns to level 1 and begins a new game. 
+
+Pressing `ESC` returns to Title Screen Mode.
+
+### Test Mode
+
+This mode can only be accessed by passing the `--test` argument on the command line. Start Title Screen Mode
+and then exit the application with exit code 0 (normal termination) after 100ms. This mode simply confirms that
+the game starts up correctly. 
+
+## Heads-up display (HUD)
+
+During Game Mode, a HUD is displayed in the upper-right corner of the display. The HUD should be displayed with
+60% opacity so that it does not completely obscure the player's view of the game area. The HUD has a rounded cyan
+border with width 4 pixels. The HUD displays the following data:
+
+- Current 1-based level number (label "Level:"). Font color: white.
+- Count of asteroids destroyed (label "Hits:"). This does NOT include asteroid splits, only asteroid destruction 
+  events. Font color: white.
+- Current weapon (simply label "Cannon", "Laser", or "Shield"). Font color depends on weapon: Cannon is displayed
+  in yellow, Laser is displayed in light blue, and Shield is displayed in red.
+- Current 1-based weapon power level (label "Power:"). Font color: matches weapon label color.
+- Weapon reload indicator (if applicable... see Weapons section). Label ("Charge:") in white text.
+
+The HUD is ONLY displayed in Game Mode. In Pause Mode, Game Over Mode, and Title Screen Mode, the HUD is hidden.
+
+## Weapons
+
+Pressing and/or holding the space bar activates the player's current weapon.
+
+The following weapons are available in the game:
+- Cannon (default weapon)
+- Laser beam
+- Ramming shield
+
+Each weapon has three levels of power, which affects its abilities. The player starts with the Cannon on power 
+level 1.
+
+Every 30 seconds of gameplay, a circular "powerup" icon of radius 20 pixels will appear randomly on the screen. The 
+icon can never appear directly on the player's ship or directly in contact with any asteroid. The icon's color
+and label are randomly selected from the following list:
+
+- White letter "C" on a yellow circle: this represents a Cannon powerup.
+- White letter "L" on a light blue circle: this represents a Laser powerup.
+- White letter "S" on a red circle: this represents a Shield powerup.
+
+Only ONE such icon can appear on screen at a time. The circle drifts at a speed of 2 pixels per frame in a randomly
+chosen direction. If the icon impacts an asteroid of any size, it is destroyed and removed from the screen. This
+counts as an asteroid hit (update the hit counter in the HUD if necessary)! The asteroid that impacted it will 
+be split or destroyed according to the usual asteroid impact rules.
+
+If the player's ship impacts the icon, the icon is removed from the screen, and the player's current weapon is
+adjusted according to the following rules:
+
+- if the icon was the same type as the player's current weapon, the player's weapon power increases by 1, to a
+  maximum of 3.
+- if the icon was of a different type than the player's current weapon, the player's current weapon type switches
+  to the icon's type, and the player's weapon power level resets to 1.
+
+Current weapon, power level, and charge level (if applicable) are maintained when advancing levels. 
+When restarting a game at level 1, the player is always reset to the Cannon at power level 1.
+
+### Cannon
+
+Level 1: a single projectile fires from the tip of the ship. Its initial velocity is the ship's current velocity
+plus 6 pixels/frame in the ship's facing direction. Cannon projectiles travel 1000 pixels from the spawn point,
+respecting screen wrap on all screen edges. If the projectile travels 1000 pixels without impacting anything,
+the projectile simply disappears and is removed from play. If a projectile impacts an asteroid, the projectile
+is removed from play, and an asteroid impact event is triggered. If a projectile impacts a powerup icon, the 
+projectile is removed from play, and the icon is destroyed. Only three projectiles can be in flight at a time.
+Pressing space when three projectiles are already in place does NOT spawn a new projectile. Holding space has no
+effect - only one projectile is spawned for each press of the space bar. Cannon projectiles at this power level
+are yellow.
+
+Level 2: three projectiles fire from the tip of the ship in a 20 degree arc. The same direction, velocity, distance,
+and impact rules apply to these projectiles. The player can now have 9 projectiles in flight at a time. Pressing
+the space bar when more than 6 projectiles are in flight does nothing. Holding space does nothing. Each press
+of the space bar spawns three projectiles. Cannon projectiles at this power level are orange.
+
+Level 3: Increase projectile size to 4x4 pixels. Projectile color is now white. Increase projectile initial speed 
+to 8 pixels per frame. The player is allowed an unlimited number of projectiles in flight at this power level.
+Holding space does nothing - every press of the space bar spawns three projectiles.
+
+No reload indicator is displayed in the HUD for this weapon.
+
+Note: due to screen wrapping, it is possible for a player's Cannon projectile to impact the player's own ship.
+This instantly transitions to Game Over Mode with the special additional message "Friendly fire!" displayed
+on the screen. Cannon projectiles cannot cause an impact with the player's ship immediately after spawning. 
+
+### Laser
+
+Level 1: A light blue beam is rendered in a straight line of width 1 pixel from the tip of the player's ship, 
+extending 100 pixels in the ship's facing direction. The beam moves with the ship, such that it is always 
+projecting from the tip of the ship in the ship's facing direction, even as the ship moves or rotates. The 
+beam is rendered for as long as the user holds the space bar, or until its charge is depleted. The laser has 
+a charge of 100 units, which depletes at a rate of 3 units per frame for as long as the space bar is held. 
+When the weapon's charge reaches 0, the beam is discontinued. When the space bar is not held, the weapon's 
+charge recovers at a rate of 1 unit per frame. The weapon cannot be activated if the current charge is below 20.
+If the beam impacts any asteroid, this triggers an asteroid impact event and immediately deactivates the laser.
+The player must release the space bar and press it again to reactivate the laser. The laser does not pass through
+asteroids! The first asteroid it impacts triggers ONE impact event. If the beam impacts a powerup icon, the 
+powerup icon is destroyed. The laser beam respects screen wrap on all screen edges.
+
+Level 2: Increase beam width to 2 pixels, and beam length to 125 pixels. Weapon charge now depletes at a rate
+of 2 units per frame and recharge rate increases to 2 units per frame. Otherwise, the same rules apply here
+as in level 1.
+
+Level 3: Increase beam width to 3 pixels and change beam color to white. Weapon discharge and recharge rates
+remain the same. Any asteroid impacted by this beam is immediately destroyed. This bypasses the usual asteroid
+split rules.
+
+A recharge indicator should be displayed in the HUD showing the laser's current charge as a light blue bar
+on a dark gray background, similar to a progress bar. 
+
+### Ramming Shield
+
+Level 1: Holding the space bar activates a circular shield around the player's ship, which should be represented
+as a red circle with border width 1 pixel and radius of 35 pixels. The player's ship is centered within this circle.
+Any asteroid that impacts the shield causes an asteroid impact event. This impact should cause the player's ship
+to "bounce" away from the point of impact. This imparts velocity to the player's ship directly proportional to the
+radius of the asteroid, using the formula velocity = radius/5. Impacting an asteroid of radius 40 therefore 
+immediately accelerates the player's ship to 8 pixels/frame in a direction directly away from the point of impact. 
+This discards and replaces any current direction/velocity the player's ship had before impact. If the shield 
+impacts a powerup icon at any point, the icon is destroyed - the player must lower the shield to 
+pick up a powerup icon. The shield has a charge of 100 units, which discharges at a rate of 5 pixels per frame. 
+If the charge reaches 0, the shield is deactivated even if the player continues holding the space bar. The shield 
+recharges at a rate of 1 pixel per frame. The shield cannot be activated if the charge is below 20 units.
+
+Level 2: Increase shield border width to 2 pixels. The "bounce" formula changes to velocity = radius/8, so that
+the bounce is less violent. Discharge rate changes to 3 units per frame, and recharge rate increases to 3 units
+per frame.
+
+Level 3: Increase shield border width to 3 pixels and increase shield radius to 40 pixels. The "bounce" formula
+changes to velocity = radius/10. Discharge rate and recharge rate remains the same.
+
+A recharge indicator should be displayed in the HUD showing the shield's current charge as a red bar on a dark
+gray background, similar to a progress bar.
+
+## Thrusters
+
+When the player is thrusting, small yellow circles should be ejected from the rear of the ship. These circles should
+have a random radius between 3 and 8 pixels. They fade from yellow to orange, and then to red, and their alpha is
+adjusted so that they become fully transparent as they travel from the ship. This simulates thruster exhaust. 
+These circles do not cause asteroid impact events and have no effect on powerup icons. It is a
+purely cosmetic visual effect. Initial velocity is random between 6 and 10 pixels per frame. Alpha adjustment is
+5% per frame, starting from fully opaque and ending with fully invisible.
+
+## Starfield background
+
+In all modes, a subtle starfield is displayed in the background. This consists of a random number between 100 and 200 of
+single pixel "stars" in grayscale colors. These stars do not move, but they do slowly shift color
+by increasing their RGB values at a rate of 0.1% per frame until they reach max brightness, then by decreasing their
+brightness by the same rate until they reach pure black, and then repeating the cycle. The red, green, and blue components
+of each star must always be adjusted together, such that the stars are only ever rendered in grayscale (black or gray or white),
+never any other color.
+
+## Window resize handling
+
+Resizing the window during Game Mode may cause the positions of asteroids to be fully off-screen. This should trigger 
+an immediate forced screen wrap so that the asteroid reappears as soon as the resize completes.
+
