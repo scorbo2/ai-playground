@@ -2661,8 +2661,8 @@ class Game:
 
         # Draw instructions
         instructions = [
-            "Arrow Keys or WASD: Rotate and Thrust",
-            "Space: Shoot",
+            "Left/Right: Rotate  |  Up: Thrust",
+            "Space: Activate weapon",
             "ESC: Pause  |  F11: Fullscreen",
             "",
             "Press Enter to Start",
