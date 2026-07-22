@@ -240,8 +240,10 @@ SHIELD_HUD_BAR_BORDER = 1    # pixels
 POWERUP_RADIUS = 20           # pixels
 POWERUP_SPEED = 2             # pixels per frame (drift speed)
 
-# Powerup spawn interval
-POWERUP_SPAWN_INTERVAL_FRAMES = 1800  # 30 seconds at 60 FPS
+# Powerup spawn interval (dynamic based on level)
+POWERUP_BASE_INTERVAL_FRAMES = 1800      # 30 seconds at 60 FPS (level 1)
+POWERUP_INTERVAL_DECREASE_PER_LEVEL = 300  # 5 seconds at 60 FPS
+POWERUP_MIN_INTERVAL_FRAMES = 900          # 15 seconds at 60 FPS
 
 # Powerup types and colors
 POWERUP_CANNON = "C"
@@ -1042,7 +1044,7 @@ class Game:
 
         # Powerup state
         self.powerup = None              # Current active powerup (or None)
-        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Frames until next powerup spawn
+        self.powerup_spawn_timer = POWERUP_BASE_INTERVAL_FRAMES  # Frames until next powerup spawn
 
         # Cosmetic effects (Stage 10)
         self.stars = []                  # Starfield stars
@@ -1054,6 +1056,9 @@ class Game:
 
         # Game over reason (for special messages like "Friendly fire!")
         self.gameover_reason = ""
+
+        # Gameplay timer (accumulates frames during active gameplay only)
+        self.game_time_frames = 0
 
         # Level text fade
         self.level_text_timer = 0        # frames remaining for "Begin level N" text
@@ -1850,6 +1855,19 @@ class Game:
 
     # ── Powerup management ───────────────────────────────────────────────
 
+    def _get_powerup_spawn_interval(self):
+        """Compute the powerup spawn interval in frames based on current level.
+
+        Level 1: 30 seconds. Each subsequent level subtracts 5 seconds.
+        Minimum interval is 15 seconds regardless of level.
+
+        Returns:
+            Spawn interval in frames.
+        """
+        interval = POWERUP_BASE_INTERVAL_FRAMES - \
+            POWERUP_INTERVAL_DECREASE_PER_LEVEL * (self.level - 1)
+        return max(POWERUP_MIN_INTERVAL_FRAMES, interval)
+
     def _try_spawn_powerup(self):
         """Attempt to spawn a new powerup if the timer has expired.
 
@@ -1876,7 +1894,7 @@ class Game:
                                self.window_height - POWERUP_RADIUS)
             if self._is_safe_powerup_position(x, y):
                 self.powerup = Powerup(x, y, powerup_type)
-                self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
+                self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
 
         # Fallback: try corners
@@ -1889,7 +1907,7 @@ class Game:
         for cx, cy in corners:
             if self._is_safe_powerup_position(cx, cy):
                 self.powerup = Powerup(cx, cy, powerup_type)
-                self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
+                self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
 
     def _is_safe_powerup_position(self, x, y):
@@ -2116,7 +2134,7 @@ class Game:
         Panel features:
         - Rounded cyan border (4 px width)
         - 60% opacity dark background
-        - Displays: Level, Hits, Weapon name, Power level
+        - Displays: Level, Hits, Time, Weapon name, Power level
         - Charge bar (for laser or shield only)
 
         HUD is only visible in Game Mode.
@@ -2135,9 +2153,16 @@ class Game:
             weapon_color = HUD_SHIELD_COLOR
 
         # Build HUD lines
+        # Compute gameplay time as MM:SS
+        total_seconds = self.game_time_frames // TARGET_FPS
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        time_str = f"{minutes:02d}:{seconds:02d}"
+
         lines = [
             ("Level: " + str(self.level), COLOR_WHITE),
             ("Hits: " + str(self.hit_count), COLOR_WHITE),
+            ("Time: " + time_str, COLOR_WHITE),
             ("Weapon: " + self.weapon_type, weapon_color),
             ("Power: " + str(self.weapon_power), weapon_color),
         ]
@@ -2252,7 +2277,7 @@ class Game:
         self.shield_active = False
         self.shield_hit_asteroids.clear()
         self.powerup = None
-        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES  # Reset spawn timer for new level
+        self.powerup_spawn_timer = self._get_powerup_spawn_interval()  # Reset spawn timer for new level
         self.particles.clear()  # Clear particles for new level
         self._spawn_level_asteroids(level_number)
         self.level_text_timer = LEVEL_TEXT_DURATION_FRAMES
@@ -2270,7 +2295,8 @@ class Game:
         self.shield_active = False
         self.shield_hit_asteroids.clear()
         self.powerup = None
-        self.powerup_spawn_timer = POWERUP_SPAWN_INTERVAL_FRAMES
+        self.powerup_spawn_timer = self._get_powerup_spawn_interval()
+        self.game_time_frames = 0  # Reset gameplay timer on restart
         self._start_level(1)
 
     def _spawn_level_asteroids(self, level_number):
@@ -2589,6 +2615,8 @@ class Game:
 
         # Update projectiles (only after fade-out)
         if self.level_text_timer <= 0:
+            # Accumulate gameplay time (excludes pause and level transitions)
+            self.game_time_frames += 1
             self.projectiles = [
                 p for p in self.projectiles
                 if p.update(self.window_width, self.window_height)
