@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SuperAsteroids — Stages 1-8: Full Game with Weapons + Powerups
+SuperAsteroids — Stages 1-9: Full Game with Weapons, Powerups, and HUD
 
 A derivative of the classic Asteroids arcade game, built with pygame-ce.
 Stage 1: Window setup, resize handling, F11 fullscreen, state machine.
@@ -10,7 +10,8 @@ Stage 4: Collision, asteroid splitting/destruction, hit counter, level progressi
 Stage 5: Cannon weapon with 3 power levels, projectile physics, friendly fire.
 Stage 6: Laser weapon with charge mechanics, screen-wrapping beam, L3 instant destroy.
 Stage 7: Shield weapon with charge mechanics, bounce physics, asteroid deflection.
-Stage 8: Powerup spawning, collection, weapon switching, HUD display.
+Stage 8: Powerup spawning, collection, weapon switching.
+Stage 9: Full HUD panel with rounded border, level/hits/weapon/charge display.
 """
 
 import math
@@ -39,6 +40,7 @@ COLOR_RED = (255, 0, 0)
 COLOR_YELLOW = (255, 255, 0)
 COLOR_ORANGE = (255, 165, 0)
 COLOR_GREEN = (0, 255, 0)
+COLOR_CYAN = (0, 255, 255)
 
 # Game modes (state machine states)
 MODE_TITLE = "TITLE"
@@ -251,6 +253,19 @@ POWERUP_SHIELD_COLOR = COLOR_RED
 HUD_CANNON_COLOR = COLOR_YELLOW
 HUD_LASER_COLOR = (100, 200, 255)     # light blue
 HUD_SHIELD_COLOR = COLOR_RED
+
+# HUD panel (Stage 9: full HUD with border and background)
+HUD_BORDER_COLOR = COLOR_CYAN
+HUD_BORDER_WIDTH = 4
+HUD_BORDER_RADIUS = 8         # corner rounding in pixels
+HUD_BACKGROUND_ALPHA = 153     # 60% opacity (0-255 scale)
+HUD_MARGIN = 10               # margin from screen edges (upper-right)
+HUD_PADDING = 10              # internal padding inside the panel
+HUD_FONT_SIZE = 24            # font size for HUD text
+HUD_LINE_SPACING = 24         # vertical spacing between HUD lines
+HUD_CHARGE_BAR_WIDTH = 150    # width of charge bar within HUD
+HUD_CHARGE_BAR_HEIGHT = 12    # height of charge bar
+HUD_CHARGE_BAR_GAP = 6        # gap between "Charge:" label and bar
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1358,40 +1373,6 @@ class Game:
                                   int(end_y % self.window_height)),
                                  max(beam_width, 1))
 
-    def _draw_laser_charge_bar(self):
-        """Render the laser charge bar HUD element.
-
-        Drawn in the upper-right corner: light blue fill on dark gray background.
-        """
-        if self.weapon_type != WEAPON_LASER:
-            return
-
-        margin = 10
-        bar_x = self.window_width - LASER_HUD_BAR_WIDTH - margin
-        bar_y = margin
-
-        # Background (dark gray)
-        bg_rect = pygame.Rect(
-            bar_x - LASER_HUD_BAR_BORDER,
-            bar_y - LASER_HUD_BAR_BORDER,
-            LASER_HUD_BAR_WIDTH + LASER_HUD_BAR_BORDER * 2,
-            LASER_HUD_BAR_HEIGHT + LASER_HUD_BAR_BORDER * 2,
-        )
-        pygame.draw.rect(self.screen, (40, 40, 40), bg_rect,
-                         border_radius=3)
-
-        # Fill (light blue, proportional to charge)
-        fill_width = int(
-            LASER_HUD_BAR_WIDTH * (self.laser_charge / LASER_MAX_CHARGE)
-        )
-        if fill_width > 0:
-            fill_rect = pygame.Rect(
-                bar_x, bar_y, fill_width, LASER_HUD_BAR_HEIGHT
-            )
-            _, _, beam_color, _, _ = self._get_laser_params()
-            pygame.draw.rect(self.screen, beam_color, fill_rect,
-                             border_radius=2)
-
     # ── Shield weapon ────────────────────────────────────────────────────
 
     def _activate_shield(self):
@@ -1561,39 +1542,6 @@ class Game:
             border_width,
         )
 
-    def _draw_shield_charge_bar(self):
-        """Render the shield charge bar HUD element.
-
-        Drawn in the upper-right corner: red fill on dark gray background.
-        """
-        if self.weapon_type != WEAPON_SHIELD:
-            return
-
-        margin = 10
-        bar_x = self.window_width - SHIELD_HUD_BAR_WIDTH - margin
-        bar_y = margin
-
-        # Background (dark gray)
-        bg_rect = pygame.Rect(
-            bar_x - SHIELD_HUD_BAR_BORDER,
-            bar_y - SHIELD_HUD_BAR_BORDER,
-            SHIELD_HUD_BAR_WIDTH + SHIELD_HUD_BAR_BORDER * 2,
-            SHIELD_HUD_BAR_HEIGHT + SHIELD_HUD_BAR_BORDER * 2,
-        )
-        pygame.draw.rect(self.screen, (40, 40, 40), bg_rect,
-                         border_radius=3)
-
-        # Fill (red, proportional to charge)
-        fill_width = int(
-            SHIELD_HUD_BAR_WIDTH * (self.shield_charge / SHIELD_MAX_CHARGE)
-        )
-        if fill_width > 0:
-            fill_rect = pygame.Rect(
-                bar_x, bar_y, fill_width, SHIELD_HUD_BAR_HEIGHT
-            )
-            pygame.draw.rect(self.screen, SHIELD_COLOR, fill_rect,
-                             border_radius=2)
-
     # ── Powerup management ───────────────────────────────────────────────
 
     def _try_spawn_powerup(self):
@@ -1747,14 +1695,22 @@ class Game:
             self.powerup.draw(self.screen)
 
     def _draw_hud(self):
-        """Render the complete HUD: weapon info and charge bars.
+        """Render the complete HUD panel in the upper-right corner.
 
-        Displays:
-        - Weapon name in appropriate color
-        - Power level in matching color
-        - Charge bar (for laser or shield)
+        Panel features:
+        - Rounded cyan border (4 px width)
+        - 60% opacity dark background
+        - Displays: Level, Hits, Weapon name, Power level
+        - Charge bar (for laser or shield only)
+
+        HUD is only visible in Game Mode.
         """
-        # Weapon info
+        if self.current_mode != MODE_GAME:
+            return
+
+        font = pygame.font.Font(None, HUD_FONT_SIZE)
+
+        # Determine weapon color
         if self.weapon_type == WEAPON_CANNON:
             weapon_color = HUD_CANNON_COLOR
         elif self.weapon_type == WEAPON_LASER:
@@ -1762,26 +1718,102 @@ class Game:
         else:  # WEAPON_SHIELD
             weapon_color = HUD_SHIELD_COLOR
 
-        margin = 10
-        font = pygame.font.Font(None, 24)
+        # Build HUD lines
+        lines = [
+            ("Level: " + str(self.level), COLOR_WHITE),
+            ("Hits: " + str(self.hit_count), COLOR_WHITE),
+            ("Weapon: " + self.weapon_type, weapon_color),
+            ("Power: " + str(self.weapon_power), weapon_color),
+        ]
 
-        # Weapon name
-        weapon_text = font.render(
-            f"Weapon: {self.weapon_type}", True, weapon_color
+        # Determine if we need a charge bar line
+        has_charge = self.weapon_type in (WEAPON_LASER, WEAPON_SHIELD)
+
+        # Measure all text to compute panel width
+        max_width = 0
+        for text, _ in lines:
+            tw = font.size(text)[0]
+            if tw > max_width:
+                max_width = tw
+
+        if has_charge:
+            charge_label = font.render("Charge:", True, COLOR_WHITE)
+            charge_label_w = charge_label[0]
+            charge_total_w = charge_label_w + HUD_CHARGE_BAR_GAP + HUD_CHARGE_BAR_WIDTH
+            if charge_total_w > max_width:
+                max_width = charge_total_w
+
+        # Panel dimensions
+        panel_width = max_width + HUD_PADDING * 2
+        line_height = HUD_LINE_SPACING
+        panel_height = (len(lines) * line_height) + HUD_PADDING * 2
+
+        if has_charge:
+            panel_height += HUD_CHARGE_BAR_HEIGHT + HUD_CHARGE_BAR_GAP
+
+        # Panel position (upper-right corner)
+        panel_x = self.window_width - panel_width - HUD_MARGIN
+        panel_y = HUD_MARGIN
+
+        # Create panel surface with alpha
+        panel = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+
+        # Draw semi-transparent background
+        bg_color = (0, 0, 0, HUD_BACKGROUND_ALPHA)
+        panel.fill(bg_color)
+
+        # Draw rounded border (cyan)
+        pygame.draw.rect(
+            panel, HUD_BORDER_COLOR,
+            (0, 0, panel_width, panel_height),
+            width=HUD_BORDER_WIDTH,
+            border_radius=HUD_BORDER_RADIUS,
         )
-        self.screen.blit(weapon_text, (margin, margin))
 
-        # Power level
-        power_text = font.render(
-            f"Power: {self.weapon_power}", True, weapon_color
-        )
-        self.screen.blit(power_text, (margin, margin + 24))
+        # Blit panel to screen
+        self.screen.blit(panel, (panel_x, panel_y))
 
-        # Charge bar (only for laser or shield)
-        if self.weapon_type == WEAPON_LASER:
-            self._draw_laser_charge_bar()
-        elif self.weapon_type == WEAPON_SHIELD:
-            self._draw_shield_charge_bar()
+        # Render text lines onto screen (positioned relative to panel)
+        text_x = panel_x + HUD_PADDING
+        for i, (text, color) in enumerate(lines):
+            surface = font.render(text, True, color)
+            text_y = panel_y + HUD_PADDING + (i * line_height)
+            self.screen.blit(surface, (text_x, text_y))
+
+        # Render charge bar if applicable
+        if has_charge:
+            charge_y = panel_y + HUD_PADDING + (len(lines) * line_height) + HUD_CHARGE_BAR_GAP
+
+            # "Charge:" label
+            charge_label = font.render("Charge:", True, COLOR_WHITE)
+            self.screen.blit(charge_label, (text_x, charge_y))
+
+            # Charge bar background (dark gray)
+            bar_x = text_x + charge_label_w + HUD_CHARGE_BAR_GAP
+            bar_rect = pygame.Rect(
+                bar_x, charge_y,
+                HUD_CHARGE_BAR_WIDTH, HUD_CHARGE_BAR_HEIGHT,
+            )
+            pygame.draw.rect(self.screen, (40, 40, 40), bar_rect,
+                             border_radius=3)
+
+            # Charge bar fill
+            if self.weapon_type == WEAPON_LASER:
+                charge = self.laser_charge
+                max_charge = LASER_MAX_CHARGE
+                fill_color = weapon_color
+            else:  # WEAPON_SHIELD
+                charge = self.shield_charge
+                max_charge = SHIELD_MAX_CHARGE
+                fill_color = weapon_color
+
+            fill_width = int(HUD_CHARGE_BAR_WIDTH * (charge / max_charge))
+            if fill_width > 0:
+                fill_rect = pygame.Rect(
+                    bar_x, charge_y, fill_width, HUD_CHARGE_BAR_HEIGHT
+                )
+                pygame.draw.rect(self.screen, fill_color, fill_rect,
+                                 border_radius=2)
 
     # ── Level management ─────────────────────────────────────────────────
 
