@@ -155,6 +155,9 @@
 - HUD updates: weapon name in appropriate color, power level in matching color
 - Asteroid splits and destruction events have a small random chance of spawning a new powerup icon at the point of impact:
   - Chance starts at 8% at level 1 and decreases by 2% for every subsequent level, with a minimum chance of 1%
+- Implement support for `--debug` command line argument:
+  - if specified, hotkeys `l`, `c`, and `s` should spawn an immediate powerup icon of that type (laser, cannon, or shield)
+  - if not specified, those keys do nothing.
 
 ---
 

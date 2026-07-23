@@ -165,7 +165,7 @@ LASER_L2_LENGTH = 125     # pixels long
 LASER_L2_COLOR = (100, 200, 255)   # light blue
 
 LASER_L3_WIDTH = 3        # pixels wide
-LASER_L3_LENGTH = 125     # pixels long (same as L2)
+LASER_L3_LENGTH = 150     # pixels long
 LASER_L3_COLOR = COLOR_WHITE
 
 # Laser charge mechanics
@@ -1041,9 +1041,15 @@ class Projectile:
 class Game:
     """Main game controller. Manages the window, state machine, and rendering."""
 
-    def __init__(self):
-        """Initialize pygame and set up the window."""
+    def __init__(self, debug_mode=False):
+        """Initialize pygame and set up the window.
+
+        Args:
+            debug_mode: If True, enables debug key bindings (l/s/c to spawn
+                        powerups) during game mode.
+        """
         pygame.init()
+        self.debug_mode = debug_mode
 
         # ── Sound effects ────────────────────────────────────────────────
         pygame.mixer.init()
@@ -1338,6 +1344,15 @@ class Game:
                 elif self.weapon_type == WEAPON_SHIELD:
                     self._activate_shield()
 
+        # ── Debug mode: l/s/c to spawn powerups ──────────────────────────
+        if self.debug_mode:
+            if key == pygame.K_l:
+                self._debug_spawn_powerup(POWERUP_LASER)
+            elif key == pygame.K_s:
+                self._debug_spawn_powerup(POWERUP_SHIELD)
+            elif key == pygame.K_c:
+                self._debug_spawn_powerup(POWERUP_CANNON)
+
     def _handle_pause_input(self, key):
         """Handle input while in Pause Mode."""
         if key == pygame.K_ESCAPE:
@@ -1513,9 +1528,9 @@ class Game:
         """Check if the active laser beam has hit any asteroid or powerup.
 
         Uses sampling along the beam line to detect collisions, with
-        screen wrapping awareness. On first hit, the asteroid is split
-        or destroyed (L3 destroys instantly regardless of size), and the
-        beam deactivates.
+        screen wrapping awareness. All asteroids and powerups intersecting
+        the beam are hit in a single pass. The beam continues firing as
+        long as space is held and charge remains.
         """
         if not self.laser_active:
             return
@@ -1529,11 +1544,10 @@ class Game:
         # Sampling interval: small enough to catch all collisions
         SAMPLE_INTERVAL = 5  # pixels between samples
 
-        best_hit = None       # asteroid_index of closest asteroid hit
-        best_distance = float('inf')
-        # Track closest powerup hit separately
-        best_powerup_index = None  # index in self.powerups
-        best_powerup_distance = float('inf')
+        # Collect ALL asteroid hits: dict of {asteroid_index: closest_t}
+        asteroid_hits = {}
+        # Collect ALL powerup hits: dict of {powerup_index: closest_t}
+        powerup_hits = {}
 
         for t in range(0, int(beam_length) + 1, SAMPLE_INTERVAL):
             # Sample point along beam, with screen wrapping
@@ -1555,9 +1569,11 @@ class Game:
                 distance = math.hypot(adx, ady)
                 hit_threshold = asteroid.radius + beam_width / 2
 
-                if distance < hit_threshold and t < best_distance:
-                    best_hit = ai
-                    best_distance = t
+                if distance < hit_threshold:
+                    # Record if this is the first hit for this asteroid,
+                    # or if this sample point is closer than previously found
+                    if ai not in asteroid_hits or t < asteroid_hits[ai]:
+                        asteroid_hits[ai] = t
 
             # Check if beam hits any powerup
             for pu_i, powerup in enumerate(self.powerups):
@@ -1572,30 +1588,28 @@ class Game:
                 pdistance = math.hypot(pdx, pdy)
                 phit_threshold = POWERUP_RADIUS + beam_width / 2
 
-                if pdistance < phit_threshold and t < best_powerup_distance:
-                    best_powerup_index = pu_i
-                    best_powerup_distance = t
+                if pdistance < phit_threshold:
+                    if pu_i not in powerup_hits or t < powerup_hits[pu_i]:
+                        powerup_hits[pu_i] = t
 
-        # Resolve the closest hit (asteroid or powerup)
-        if best_hit is not None and best_distance <= best_powerup_distance:
-            # Hit an asteroid
-            asteroid = self.asteroids[best_hit]
-            self.laser_hit_asteroids.add(best_hit)
+        # Process all asteroid hits. Pop in descending index order so that
+        # removing a higher-index asteroid doesn't invalidate lower indices.
+        if asteroid_hits:
+            for ai in sorted(asteroid_hits, reverse=True):
+                self.laser_hit_asteroids.add(ai)
+                asteroid = self.asteroids[ai]
+                if self.weapon_power == 3:
+                    # L3: instant destroy, bypass split
+                    self._destroy_asteroid(asteroid, ai)
+                else:
+                    # L1/L2: normal split or destroy
+                    self._hit_asteroid_from_laser(asteroid, ai)
 
-            if self.weapon_power == 3:
-                # L3: instant destroy, bypass split
-                self._destroy_asteroid(asteroid, best_hit)
-            else:
-                # L1/L2: normal split or destroy
-                self._hit_asteroid_from_laser(asteroid, best_hit)
-
-            # Beam deactivates after first hit
-            self._deactivate_laser()
-        elif best_powerup_index is not None:
-            # Hit a powerup — destroy it and deactivate beam
-            self._play_sfx("powerup_destroyed")
-            self.powerups.pop(best_powerup_index)
-            self._deactivate_laser()
+        # Process all powerup hits, descending index to avoid invalidation
+        if powerup_hits:
+            for pu_i in sorted(powerup_hits, reverse=True):
+                self._play_sfx("powerup_destroyed")
+                self.powerups.pop(pu_i)
 
     def _destroy_asteroid(self, asteroid, asteroid_index):
         """Destroy an asteroid completely (used by laser L3 and shield L3).
@@ -1988,6 +2002,39 @@ class Game:
         interval = POWERUP_BASE_INTERVAL_FRAMES - \
             POWERUP_INTERVAL_DECREASE_PER_LEVEL * (self.level - 1)
         return max(POWERUP_MIN_INTERVAL_FRAMES, interval)
+
+    def _debug_spawn_powerup(self, powerup_type):
+        """Debug helper: spawn a powerup of the given type at a random position.
+
+        Only active when the game was launched with --debug. Spawns
+        immediately without waiting for the spawn timer.
+
+        Args:
+            powerup_type: One of POWERUP_CANNON, POWERUP_LASER, POWERUP_SHIELD.
+        """
+        # Try random positions
+        for _ in range(50):
+            x = random.uniform(POWERUP_RADIUS,
+                               self.window_width - POWERUP_RADIUS)
+            y = random.uniform(POWERUP_RADIUS,
+                               self.window_height - POWERUP_RADIUS)
+            if self._is_safe_powerup_position(x, y):
+                self.powerups.append(Powerup(x, y, powerup_type))
+                self._play_sfx("powerup_spawn")
+                return
+
+        # Fallback: try corners
+        corners = [
+            (50, 50),
+            (self.window_width - 50, 50),
+            (50, self.window_height - 50),
+            (self.window_width - 50, self.window_height - 50),
+        ]
+        for cx, cy in corners:
+            if self._is_safe_powerup_position(cx, cy):
+                self.powerups.append(Powerup(cx, cy, powerup_type))
+                self._play_sfx("powerup_spawn")
+                return
 
     def _get_powerup_drop_chance(self):
         """Compute the probability that an asteroid split/destroy spawns a powerup.
@@ -2906,14 +2953,14 @@ class Game:
 
         # Draw title text (extra-large font)
         title_font = pygame.font.Font(None, FONT_SIZE_TITLE)
-        title = title_font.render("Super Asteroids", True, COLOR_WHITE)
+        title = title_font.render("SuperAsteroids", True, COLOR_WHITE)
         self._blit_centered(title, vertical_ratio=0.25)
 
         # Draw instructions
         instructions = [
             "Left/Right: Rotate  |  Up: Thrust",
             "Space: Activate weapon",
-            "ESC: Pause  |  F11: Fullscreen",
+            "ESC: Pause  |  F11: Fullscreen  |  F2: Sound",
             "",
             "Press Enter to Start",
         ]
@@ -3032,10 +3079,11 @@ class Game:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    """Application entry point. Handles --test mode flag."""
+    """Application entry point. Handles --test and --debug mode flags."""
     test_mode = "--test" in sys.argv
+    debug_mode = "--debug" in sys.argv
 
-    game = Game()
+    game = Game(debug_mode=debug_mode)
 
     if test_mode:
         # Test mode: render the title screen briefly, then exit cleanly

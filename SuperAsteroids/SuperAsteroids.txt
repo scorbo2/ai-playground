@@ -295,4 +295,16 @@ These will be packaged with the game. Load them into memory on startup (with gra
 if any fail to load). There is a README.md in the sfx subdirectory that contains instructions as to which sound
 effects are associated with which game events.
 
+## "Debug" option (for cheating)
+
+If the `--debug` argument is specified on the command line, then additional hotkeys are available to
+spawn an immediate powerup:
+
+- press 'C' to spawn a Cannon powerup
+- press 'L' to spawn a Laser powerup
+- press 'S' to spawn a shield powerup
+
+There are no limits to the number of powerup icons you can spawn at any time. 
+
+If `--debug` is not specified, these keys do nothing.
 

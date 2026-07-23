@@ -38,11 +38,11 @@ in the original requirements, made the following changes anyway:
 - Downloaded some sound effect assets into `sfx` subdirectory and wired them up. Backported this into the spec and the implementation plan (added Stage 11)
 - Asteroids have a small random chance of spawning a powerup icon when they split or are destroyed. The chance decreases as levels advance.
 - Powerups are indestructible for the first 60 frames of their existence, to protect against unlucky spawn points.
+- Added a cheat mode (but called it `--debug`) with keyboard shortcuts (`L`, `S`, `C`) for spawning an immediate powerup.
+- Increased laser beam length to 150 at power level 3 (up from 125 in the spec). Also, changed the weird rule about "if the laser beam hits an asteroid, the laser is instantly deactivated". That was a dumb rule. Holding space means the laser stays on until you release space or run out of charge. 
 
 ## Future ideas
 
 - Once per level, an alien ship should appear and shoot projectiles at the player.
 - Cannon projectiles need to be larger and have a bigger hit radius. Maybe also move faster?
 - Package up a downloadable installer to make it easier for non-python devs to grab and play.
-- Add a cheat mode (but call it `--debug`) with keyboard shortcuts for switching weapons and power levels.
-- laser beam length increases from lvl1 to lvl2, but not again at lvl3? That seems weak.
