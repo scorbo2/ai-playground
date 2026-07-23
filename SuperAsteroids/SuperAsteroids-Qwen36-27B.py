@@ -255,6 +255,11 @@ POWERUP_CANNON_COLOR = COLOR_YELLOW
 POWERUP_LASER_COLOR = (100, 200, 255)  # light blue
 POWERUP_SHIELD_COLOR = COLOR_RED
 
+# Powerup drop chance on asteroid split/destroy
+POWERUP_DROP_BASE_CHANCE = 0.08          # 8% at level 1
+POWERUP_DROP_CHANCE_DECREASE_PER_LEVEL = 0.02  # -2% per level
+POWERUP_DROP_MIN_CHANCE = 0.01           # 1% minimum
+
 # HUD text colors (match weapon colors)
 HUD_CANNON_COLOR = COLOR_YELLOW
 HUD_LASER_COLOR = (100, 200, 255)     # light blue
@@ -489,8 +494,8 @@ class Powerup:
     """A collectible weapon powerup.
 
     Rendered as a colored circle with a white letter label (C, L, or S).
-    Drifts at constant speed in a random direction. Only one powerup
-    can exist on screen at a time.
+    Drifts at constant speed in a random direction. Multiple powerups
+    can coexist on screen simultaneously.
     """
 
     def __init__(self, x, y, powerup_type):
@@ -1088,8 +1093,8 @@ class Game:
         self.shield_hit_asteroids = set()  # Asteroids already bounced this frame
 
         # Powerup state
-        self.powerup = None              # Current active powerup (or None)
-        self.powerup_spawn_timer = POWERUP_BASE_INTERVAL_FRAMES  # Frames until next powerup spawn
+        self.powerups = []               # List of active powerups on screen
+        self.powerup_spawn_timer = POWERUP_BASE_INTERVAL_FRAMES  # Frames until next timer-based spawn
 
         # Cosmetic effects (Stage 10)
         self.stars = []                  # Starfield stars
@@ -1496,7 +1501,7 @@ class Game:
                 self.laser_charge = min(LASER_MAX_CHARGE, self.laser_charge)
 
     def _check_lasteroid_collision(self):
-        """Check if the active laser beam has hit any asteroid.
+        """Check if the active laser beam has hit any asteroid or powerup.
 
         Uses sampling along the beam line to detect collisions, with
         screen wrapping awareness. On first hit, the asteroid is split
@@ -1515,9 +1520,10 @@ class Game:
         # Sampling interval: small enough to catch all collisions
         SAMPLE_INTERVAL = 5  # pixels between samples
 
-        best_hit = None       # (asteroid_index, distance along beam)
+        best_hit = None       # asteroid_index of closest asteroid hit
         best_distance = float('inf')
         # Track closest powerup hit separately
+        best_powerup_index = None  # index in self.powerups
         best_powerup_distance = float('inf')
 
         for t in range(0, int(beam_length) + 1, SAMPLE_INTERVAL):
@@ -1544,10 +1550,10 @@ class Game:
                     best_hit = ai
                     best_distance = t
 
-            # Check if beam hits the active powerup
-            if self.powerup is not None:
-                pdx = sx - self.powerup.x
-                pdy = sy - self.powerup.y
+            # Check if beam hits any powerup
+            for pu_i, powerup in enumerate(self.powerups):
+                pdx = sx - powerup.x
+                pdy = sy - powerup.y
                 # Account for screen wrapping in distance check
                 if abs(pdx) > self.window_width / 2:
                     pdx -= math.copysign(self.window_width, pdx)
@@ -1558,6 +1564,7 @@ class Game:
                 phit_threshold = POWERUP_RADIUS + beam_width / 2
 
                 if pdistance < phit_threshold and t < best_powerup_distance:
+                    best_powerup_index = pu_i
                     best_powerup_distance = t
 
         # Resolve the closest hit (asteroid or powerup)
@@ -1575,17 +1582,18 @@ class Game:
 
             # Beam deactivates after first hit
             self._deactivate_laser()
-        elif best_powerup_distance < float('inf'):
-            # Hit the powerup — destroy it and deactivate beam
+        elif best_powerup_index is not None:
+            # Hit a powerup — destroy it and deactivate beam
             self._play_sfx("powerup_destroyed")
-            self.powerup = None
+            self.powerups.pop(best_powerup_index)
             self._deactivate_laser()
 
     def _destroy_asteroid(self, asteroid, asteroid_index):
         """Destroy an asteroid completely (used by laser L3 and shield L3).
 
         Spawns a destruction explosion, increments the hit counter, and
-        removes the asteroid. Does not produce split asteroids.
+        removes the asteroid. Does not produce split asteroids. May spawn
+        a powerup at the impact point based on level-dependent drop chance.
 
         Args:
             asteroid: The asteroid to destroy.
@@ -1594,6 +1602,7 @@ class Game:
         self.hit_count += 1
         self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
         self._play_sfx("asteroid_destroyed")
+        self._try_drop_powerup_at(asteroid.x, asteroid.y)
         self.asteroids.pop(asteroid_index)
 
     def _hit_asteroid_from_laser(self, asteroid, asteroid_index):
@@ -1601,7 +1610,7 @@ class Game:
 
         If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
         destroyed and the hit counter is incremented. Otherwise, it splits
-        into 2-3 smaller asteroids.
+        into 2-3 smaller asteroids. May spawn a powerup at the impact point.
 
         Args:
             asteroid: The asteroid that was hit.
@@ -1612,6 +1621,7 @@ class Game:
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
             self._play_sfx("asteroid_destroyed")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
@@ -1622,6 +1632,7 @@ class Game:
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
             self._play_sfx("asteroid_split")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1875,34 +1886,39 @@ class Game:
                     return
 
     def _check_shield_powerup_collision(self):
-        """Check if the active shield has collided with the powerup.
+        """Check if the active shield has collided with any powerup.
 
         If a collision is detected, the powerup icon is destroyed.
         The shield does not bounce off the powerup; it simply destroys it.
         """
         if not self.shield_active:
             return
-        if self.powerup is None:
+        if not self.powerups:
             return
 
         shield_radius, _, _, _, _ = self._get_shield_params()
 
-        dx = self.ship.x - self.powerup.x
-        dy = self.ship.y - self.powerup.y
-        distance = math.hypot(dx, dy)
-        hit_threshold = shield_radius + POWERUP_RADIUS
+        powerups_to_remove = []
+        for pi, powerup in enumerate(self.powerups):
+            dx = self.ship.x - powerup.x
+            dy = self.ship.y - powerup.y
+            distance = math.hypot(dx, dy)
+            hit_threshold = shield_radius + POWERUP_RADIUS
 
-        if distance < hit_threshold:
-            # Shield destroys the powerup on contact
-            self._play_sfx("powerup_destroyed")
-            self.powerup = None
+            if distance < hit_threshold:
+                powerups_to_remove.append(pi)
+                self._play_sfx("powerup_destroyed")
+
+        # Remove destroyed powerups (reverse order for safe index removal)
+        for pi in reversed(powerups_to_remove):
+            self.powerups.pop(pi)
 
     def _hit_asteroid_from_shield(self, asteroid, asteroid_index):
         """Handle an asteroid being hit by the shield.
 
         If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
         destroyed and the hit counter is incremented. Otherwise, it splits
-        into 2-3 smaller asteroids.
+        into 2-3 smaller asteroids. May spawn a powerup at the impact point.
 
         Args:
             asteroid: The asteroid that was hit.
@@ -1913,6 +1929,7 @@ class Game:
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
             self._play_sfx("asteroid_destroyed")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
@@ -1923,6 +1940,7 @@ class Game:
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
             self._play_sfx("asteroid_split")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1962,15 +1980,42 @@ class Game:
             POWERUP_INTERVAL_DECREASE_PER_LEVEL * (self.level - 1)
         return max(POWERUP_MIN_INTERVAL_FRAMES, interval)
 
+    def _get_powerup_drop_chance(self):
+        """Compute the probability that an asteroid split/destroy spawns a powerup.
+
+        Level 1: 8%. Each subsequent level subtracts 2%.
+        Minimum chance is 1% regardless of level.
+
+        Returns:
+            Drop probability as a float between 0.0 and 1.0.
+        """
+        chance = POWERUP_DROP_BASE_CHANCE - \
+            POWERUP_DROP_CHANCE_DECREASE_PER_LEVEL * (self.level - 1)
+        return max(POWERUP_DROP_MIN_CHANCE, chance)
+
+    def _try_drop_powerup_at(self, x, y):
+        """Attempt to spawn a powerup at the given position based on drop chance.
+
+        Called after each asteroid split or destruction event. Spawns a random
+        weapon type powerup at the impact point if the random roll succeeds.
+
+        Args:
+            x: Horizontal position of the impact point.
+            y: Vertical position of the impact point.
+        """
+        if random.random() < self._get_powerup_drop_chance():
+            powerup_type = random.choice([
+                POWERUP_CANNON, POWERUP_LASER, POWERUP_SHIELD
+            ])
+            self.powerups.append(Powerup(x, y, powerup_type))
+            self._play_sfx("powerup_spawn")
+
     def _try_spawn_powerup(self):
         """Attempt to spawn a new powerup if the timer has expired.
 
-        Spawns a random weapon type powerup at a safe position (not on ship
-        or asteroids). Only one powerup can exist at a time.
+        Spawns a random weapon type powerup at a safe position (not on ship,
+        asteroids, or other powerups). Multiple powerups can coexist on screen.
         """
-        if self.powerup is not None:
-            return  # Already have one on screen
-
         self.powerup_spawn_timer -= 1
         if self.powerup_spawn_timer > 0:
             return  # Not time yet
@@ -1983,11 +2028,11 @@ class Game:
         # Try random positions
         for _ in range(50):
             x = random.uniform(POWERUP_RADIUS,
-                               self.window_width - POWERUP_RADIUS)
+                                self.window_width - POWERUP_RADIUS)
             y = random.uniform(POWERUP_RADIUS,
-                               self.window_height - POWERUP_RADIUS)
+                                self.window_height - POWERUP_RADIUS)
             if self._is_safe_powerup_position(x, y):
-                self.powerup = Powerup(x, y, powerup_type)
+                self.powerups.append(Powerup(x, y, powerup_type))
                 self._play_sfx("powerup_spawn")
                 self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
@@ -2001,7 +2046,7 @@ class Game:
         ]
         for cx, cy in corners:
             if self._is_safe_powerup_position(cx, cy):
-                self.powerup = Powerup(cx, cy, powerup_type)
+                self.powerups.append(Powerup(cx, cy, powerup_type))
                 self._play_sfx("powerup_spawn")
                 self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
@@ -2009,7 +2054,8 @@ class Game:
     def _is_safe_powerup_position(self, x, y):
         """Check if a position is safe for powerup spawning.
 
-        A position is safe if it's not too close to the ship or any asteroid.
+        A position is safe if it's not too close to the ship, any asteroid,
+        or any other existing powerup.
 
         Args:
             x: Horizontal position to check.
@@ -2031,96 +2077,113 @@ class Game:
             if math.hypot(dx, dy) < POWERUP_RADIUS + asteroid.radius + 30:
                 return False
 
+        # Check distance from other powerups
+        for p in self.powerups:
+            dx = x - p.x
+            dy = y - p.y
+            if math.hypot(dx, dy) < POWERUP_RADIUS * 2 + 20:
+                return False
+
         return True
 
     def _check_ship_powerup_collision(self):
-        """Check if the ship has collected the active powerup.
+        """Check if the ship has collected any powerup.
 
-        If collected:
+        For each collected powerup:
         - Same weapon type → power level +1 (max 3)
         - Different weapon type → switch to that type, power resets to 1
         """
-        if self.powerup is None:
+        if not self.powerups:
             return
 
-        dx = self.ship.x - self.powerup.x
-        dy = self.ship.y - self.powerup.y
-        distance = math.hypot(dx, dy)
+        to_remove = []
+        for pi, powerup in enumerate(self.powerups):
+            dx = self.ship.x - powerup.x
+            dy = self.ship.y - powerup.y
+            distance = math.hypot(dx, dy)
 
-        if distance < SHIP_RADIUS + POWERUP_RADIUS:
-            # Determine which weapon type this powerup represents
-            if self.powerup.powerup_type == POWERUP_CANNON:
-                new_weapon = WEAPON_CANNON
-            elif self.powerup.powerup_type == POWERUP_LASER:
-                new_weapon = WEAPON_LASER
-            else:  # POWERUP_SHIELD
-                new_weapon = WEAPON_SHIELD
+            if distance < SHIP_RADIUS + POWERUP_RADIUS:
+                to_remove.append(pi)
 
-            if self.weapon_type == new_weapon:
-                # Same weapon type → upgrade power level
-                self.weapon_power = min(3, self.weapon_power + 1)
-            else:
-                # Different weapon type → switch and reset power
-                self.weapon_type = new_weapon
-                self.weapon_power = 1
-                # Deactivate other weapons
-                self.laser_active = False
-                self.shield_active = False
+                # Determine which weapon type this powerup represents
+                if powerup.powerup_type == POWERUP_CANNON:
+                    new_weapon = WEAPON_CANNON
+                elif powerup.powerup_type == POWERUP_LASER:
+                    new_weapon = WEAPON_LASER
+                else:  # POWERUP_SHIELD
+                    new_weapon = WEAPON_SHIELD
 
-            # Play collection sound and remove powerup
-            self._play_sfx("powerup_collected")
-            self.powerup = None
+                if self.weapon_type == new_weapon:
+                    # Same weapon type → upgrade power level
+                    self.weapon_power = min(3, self.weapon_power + 1)
+                else:
+                    # Different weapon type → switch and reset power
+                    self.weapon_type = new_weapon
+                    self.weapon_power = 1
+                    # Deactivate other weapons
+                    self.laser_active = False
+                    self.shield_active = False
+
+                # Play collection sound
+                self._play_sfx("powerup_collected")
+
+        # Remove collected powerups (reverse order for safe index removal)
+        for pi in reversed(to_remove):
+            self.powerups.pop(pi)
 
     def _check_asteroid_powerup_collision(self):
-        """Check if any asteroid has collided with the active powerup.
+        """Check if any asteroid has collided with any powerup.
 
         If collision occurs:
         - Powerup is destroyed
         - Asteroid is split or destroyed following normal hit rules
         """
-        if self.powerup is None:
+        if not self.powerups:
             return
 
-        for ai, asteroid in enumerate(self.asteroids):
-            dx = self.powerup.x - asteroid.x
-            dy = self.powerup.y - asteroid.y
-            distance = math.hypot(dx, dy)
+        # Iterate in reverse for safe removal from the powerups list
+        for pi in range(len(self.powerups) - 1, -1, -1):
+            powerup = self.powerups[pi]
+            for ai, asteroid in enumerate(self.asteroids):
+                dx = powerup.x - asteroid.x
+                dy = powerup.y - asteroid.y
+                distance = math.hypot(dx, dy)
 
-            if distance < POWERUP_RADIUS + asteroid.radius:
-                # Powerup destroyed
-                self._play_sfx("powerup_destroyed")
-                self.powerup = None
+                if distance < POWERUP_RADIUS + asteroid.radius:
+                    # Powerup destroyed
+                    self._play_sfx("powerup_destroyed")
+                    self.powerups.pop(pi)
 
-                # Asteroid is hit (split or destroy)
-                if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
-                    self.hit_count += 1
-                    self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
-                    self._play_sfx("asteroid_destroyed")
-                    self.asteroids.pop(ai)
-                else:
-                    num_splits = random.randint(2, 3)
-                    new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
-                    new_speed = math.hypot(
-                        asteroid.vx, asteroid.vy
-                    ) * ASTEROID_SPLIT_SPEED_MULT
+                    # Asteroid is hit (split or destroy)
+                    if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
+                        self.hit_count += 1
+                        self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+                        self._play_sfx("asteroid_destroyed")
+                        self.asteroids.pop(ai)
+                    else:
+                        num_splits = random.randint(2, 3)
+                        new_radius = asteroid.radius / ASTEROID_SPLIT_DIVISOR
+                        new_speed = math.hypot(
+                            asteroid.vx, asteroid.vy
+                        ) * ASTEROID_SPLIT_SPEED_MULT
 
-                    # Spawn split explosion
-                    self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
-                    self._play_sfx("asteroid_split")
+                        # Spawn split explosion
+                        self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
+                        self._play_sfx("asteroid_split")
 
-                    self.asteroids.pop(ai)
-                    for _ in range(num_splits):
-                        angle = random.uniform(0, 360)
-                        self.asteroids.append(Asteroid(
-                            asteroid.x, asteroid.y,
-                            new_radius, new_speed, angle
-                        ))
-                return  # Only one collision per frame
+                        self.asteroids.pop(ai)
+                        for _ in range(num_splits):
+                            angle = random.uniform(0, 360)
+                            self.asteroids.append(Asteroid(
+                                asteroid.x, asteroid.y,
+                                new_radius, new_speed, angle
+                            ))
+                    break  # This powerup is gone, move to next
 
     def _draw_powerup(self):
-        """Render the active powerup if one exists."""
-        if self.powerup is not None:
-            self.powerup.draw(self.screen)
+        """Render all active powerups."""
+        for powerup in self.powerups:
+            powerup.draw(self.screen)
 
     # ── Cosmetic effects (Stage 10) ──────────────────────────────────────
 
@@ -2401,7 +2464,7 @@ class Game:
         self.laser_hit_asteroids.clear()
         self.shield_active = False
         self.shield_hit_asteroids.clear()
-        self.powerup = None
+        self.powerups.clear()
         self.powerup_spawn_timer = self._get_powerup_spawn_interval()  # Reset spawn timer for new level
         self.particles.clear()  # Clear particles for new level
         self._spawn_level_asteroids(level_number)
@@ -2419,7 +2482,7 @@ class Game:
         self.shield_charge = SHIELD_MAX_CHARGE
         self.shield_active = False
         self.shield_hit_asteroids.clear()
-        self.powerup = None
+        self.powerups.clear()
         self.powerup_spawn_timer = self._get_powerup_spawn_interval()
         self.game_time_frames = 0  # Reset gameplay timer on restart
         self._start_level(1)
@@ -2604,30 +2667,35 @@ class Game:
                 return
 
     def _check_projectile_powerup_collisions(self):
-        """Check if any projectile has hit the active powerup.
+        """Check if any projectile has hit any powerup.
 
         If a collision is detected, the projectile is removed and the
         powerup icon is destroyed.
         """
-        if self.powerup is None:
+        if not self.powerups:
             return
 
         projectiles_to_remove = set()
+        powerups_to_remove = set()
 
-        for pi, projectile in enumerate(self.projectiles):
-            if pi in projectiles_to_remove:
+        for proj_i, projectile in enumerate(self.projectiles):
+            if proj_i in projectiles_to_remove:
                 continue
 
-            dx = projectile.x - self.powerup.x
-            dy = projectile.y - self.powerup.y
-            distance = math.hypot(dx, dy)
+            for pu_i, powerup in enumerate(self.powerups):
+                if pu_i in powerups_to_remove:
+                    continue
 
-            if distance < POWERUP_RADIUS:
-                # Hit! Remove projectile and destroy powerup
-                projectiles_to_remove.add(pi)
-                self._play_sfx("powerup_destroyed")
-                self.powerup = None
-                break  # Powerup is gone, no more collisions possible
+                dx = projectile.x - powerup.x
+                dy = projectile.y - powerup.y
+                distance = math.hypot(dx, dy)
+
+                if distance < POWERUP_RADIUS:
+                    # Hit! Remove projectile and destroy powerup
+                    projectiles_to_remove.add(proj_i)
+                    powerups_to_remove.add(pu_i)
+                    self._play_sfx("powerup_destroyed")
+                    break  # This projectile is consumed
 
         # Remove hit projectiles
         if projectiles_to_remove:
@@ -2636,12 +2704,16 @@ class Game:
                 if i not in projectiles_to_remove
             ]
 
+        # Remove hit powerups (reverse order for safe index removal)
+        for pu_i in reversed(sorted(powerups_to_remove)):
+            self.powerups.pop(pu_i)
+
     def _hit_asteroid(self, asteroid, asteroid_index, new_asteroids_list):
         """Handle an asteroid being hit by a projectile.
 
         If the asteroid is smaller than ASTEROID_DESTRUCTION_RADIUS, it is
         destroyed and the hit counter is incremented. Otherwise, it splits
-        into 2-3 smaller asteroids.
+        into 2-3 smaller asteroids. May spawn a powerup at the impact point.
 
         Args:
             asteroid: The asteroid that was hit.
@@ -2653,6 +2725,7 @@ class Game:
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
             self._play_sfx("asteroid_destroyed")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
         else:
             # Split into 2-3 smaller asteroids
             num_splits = random.randint(2, 3)
@@ -2662,6 +2735,7 @@ class Game:
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
             self._play_sfx("asteroid_split")
+            self._try_drop_powerup_at(asteroid.x, asteroid.y)
 
             for _ in range(num_splits):
                 angle = random.uniform(0, 360)
@@ -2770,9 +2844,9 @@ class Game:
             # Update all particles (thruster + explosions)
             self._update_particles()
 
-            # Update powerup (drift, spawning, collision)
-            if self.powerup is not None:
-                self.powerup.update(self.window_width, self.window_height)
+            # Update powerups (drift, spawning, collision)
+            for powerup in self.powerups:
+                powerup.update(self.window_width, self.window_height)
 
             # Try to spawn a new powerup if timer has expired
             self._try_spawn_powerup()

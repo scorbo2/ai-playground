@@ -37,6 +37,7 @@ in the original requirements, made the following changes anyway:
 - Ramming shield at level 3 should instantly destroy asteroids with no splitting, similar to the laser level 3.
 - Downloaded some sound effect assets into `sfx` subdirectory and wired them up. Backported this into the spec and the implementation plan (added Stage 11)
 - Asteroids have a small random chance of spawning a powerup icon when they split or are destroyed. The chance decreases as levels advance.
+- Powerups are indestructible for the first 60 frames of their existence, to protect against unlucky spawn points.
 
 ## Future ideas
 
@@ -45,4 +46,3 @@ in the original requirements, made the following changes anyway:
 - Package up a downloadable installer to make it easier for non-python devs to grab and play.
 - Add a cheat mode (but call it `--debug`) with keyboard shortcuts for switching weapons and power levels.
 - laser beam length increases from lvl1 to lvl2, but not again at lvl3? That seems weak.
-
