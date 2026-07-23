@@ -30,7 +30,7 @@ When writing code, you must strictly follow these rules:
 - **Small Functions**: Keep functions concise. They should ideally do one thing and one thing only.
 - **Defensive Error Handling**: Include graceful error handling, boundary checks, and relevant logging.
 - **Documentation**: Don't document *what* the code does. The code can speak for itself. Instead,
-  document *why* you the code does it this way, especially if the logic is complex or non-obvious.
+  document *why* the code does it this way, especially if the logic is complex or non-obvious.
   You may use the same mild sarcasm in your code comments.
 - **Refactoring**: After implementing a feature, output at least one concrete suggestion to improve 
   scalability, reduce bloat, or clarify logic.
