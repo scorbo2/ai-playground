@@ -17,6 +17,7 @@ Stage 10: Visual effects (thruster fire, explosion particles, twinkling starfiel
 """
 
 import math
+import os
 import random
 import sys
 import pygame
@@ -271,6 +272,34 @@ HUD_LINE_SPACING = 24         # vertical spacing between HUD lines
 HUD_CHARGE_BAR_WIDTH = 150    # width of charge bar within HUD
 HUD_CHARGE_BAR_HEIGHT = 12    # height of charge bar
 HUD_CHARGE_BAR_GAP = 6        # gap between "Charge:" label and bar
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOUND EFFECTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Mapping of logical sound names to WAV filenames in the sfx/ directory.
+# All sounds are pre-loaded at startup; load failures are fatal.
+SFX_FILES = {
+    "title_screen":                "title_screen.wav",
+    "cannon_lvl1":                 "cannon_lvl1.wav",
+    "cannon_lvl2":                 "cannon_lvl2.wav",
+    "cannon_lvl3":                 "cannon_lvl3.wav",
+    "laser_lvl1":                  "laser_lvl1.wav",
+    "laser_lvl2":                  "laser_lvl2.wav",
+    "laser_lvl3":                  "laser_lvl3.wav",
+    "shield_activated":            "shield_activated.wav",
+    "shield_ram":                  "shield_ram.wav",
+    "asteroid_split":              "asteroid_split.wav",
+    "asteroid_destroyed":          "asteroid_destroyed.wav",
+    "powerup_spawn":               "powerup_spawn.wav",
+    "powerup_destroyed":           "powerup_destroyed.wav",
+    "powerup_collected":           "powerup_collected.wav",
+    "ship_destroyed_asteroid":     "ship_destroyed_asteroid.wav",
+    "ship_destroyed_friendly_fire": "ship_destroyed_friendly_fire.wav",
+    "thrusters":                   "thrusters.wav",
+    "ufo":                         "ufo.wav",
+    "ufo_destroyed":               "ufo_destroyed.wav",
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGE 10: COSMETIC EFFECTS CONSTANTS
@@ -1002,6 +1031,22 @@ class Game:
         """Initialize pygame and set up the window."""
         pygame.init()
 
+        # ── Sound effects ────────────────────────────────────────────────
+        pygame.mixer.init()
+        self.sfx = {}
+        sfx_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sfx")
+        for name, filename in SFX_FILES.items():
+            path = os.path.join(sfx_dir, filename)
+            try:
+                self.sfx[name] = pygame.mixer.Sound(path)
+            except Exception as e:
+                print(f"FATAL: Cannot load sound effect '{path}': {e}")
+                print("Exiting. Please ensure all WAV files are present in the sfx/ directory.")
+                sys.exit(1)
+        self._title_sfx_played = False
+        self._thruster_sfx_playing = False
+        self.sound_enabled = True
+
         # Window state tracking
         self.window_width = INITIAL_WINDOW_WIDTH
         self.window_height = INITIAL_WINDOW_HEIGHT
@@ -1142,6 +1187,23 @@ class Game:
         for asteroid in self.title_asteroids:
             asteroid.update(self.window_width, self.window_height)
 
+    # ── Sound effects ────────────────────────────────────────────────────
+
+    def _play_sfx(self, name):
+        """Play a sound effect by logical name.
+
+        Silently ignores names that are not loaded (for future-proofing).
+        Also does nothing if sound is toggled off via F2.
+
+        Args:
+            name: Key from SFX_FILES (e.g. "cannon_lvl1").
+        """
+        if not self.sound_enabled:
+            return
+        sound = self.sfx.get(name)
+        if sound is not None:
+            sound.play()
+
     # ── Main loop ────────────────────────────────────────────────────────
 
     def run(self):
@@ -1228,6 +1290,10 @@ class Game:
     def _handle_title_input(self, key):
         """Handle input while on the Title Screen."""
         if key == pygame.K_RETURN:
+            # Play title screen sound on first entry
+            if not self._title_sfx_played:
+                self._play_sfx("title_screen")
+                self._title_sfx_played = True
             # Enter Game Mode at level 1
             self._start_level(1)
         elif key == pygame.K_ESCAPE:
@@ -1240,6 +1306,13 @@ class Game:
         if key == pygame.K_ESCAPE:
             # Pause the game
             self.current_mode = MODE_PAUSE
+        elif key == pygame.K_F2:
+            # Toggle sound on/off
+            self.sound_enabled = not self.sound_enabled
+            # If turning sound off, stop any looping thruster sound immediately
+            if not self.sound_enabled and self._thruster_sfx_playing:
+                pygame.mixer.Sound.stop(self.sfx["thrusters"])
+                self._thruster_sfx_playing = False
         elif key == pygame.K_SPACE:
             # Space bar: fire weapon (press only, not hold)
             if not self._space_was_pressed:
@@ -1268,6 +1341,7 @@ class Game:
         elif key == pygame.K_ESCAPE:
             # Return to Title Screen
             self.current_mode = MODE_TITLE
+            self._title_sfx_played = False  # Allow title sound to play again
 
     # ── Cannon weapon ────────────────────────────────────────────────────
 
@@ -1287,6 +1361,9 @@ class Game:
         # Check if we can fire
         if len(self.projectiles) >= max_flight:
             return
+
+        # Play cannon fire sound only when projectiles actually spawn
+        self._play_sfx(f"cannon_lvl{power}")
 
         tip_x, tip_y = self.ship.tip
         facing_rad = math.radians(self.ship.angle - 90)
@@ -1359,6 +1436,7 @@ class Game:
             return
         self.laser_active = True
         self.laser_hit_asteroids.clear()
+        self._play_sfx(f"laser_lvl{self.weapon_power}")
 
     def _deactivate_laser(self):
         """Deactivate the laser beam."""
@@ -1499,6 +1577,7 @@ class Game:
             self._deactivate_laser()
         elif best_powerup_distance < float('inf'):
             # Hit the powerup — destroy it and deactivate beam
+            self._play_sfx("powerup_destroyed")
             self.powerup = None
             self._deactivate_laser()
 
@@ -1514,6 +1593,7 @@ class Game:
         """
         self.hit_count += 1
         self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+        self._play_sfx("asteroid_destroyed")
         self.asteroids.pop(asteroid_index)
 
     def _hit_asteroid_from_laser(self, asteroid, asteroid_index):
@@ -1531,6 +1611,7 @@ class Game:
             # Destroy — count as a hit
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+            self._play_sfx("asteroid_destroyed")
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
@@ -1540,6 +1621,7 @@ class Game:
 
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
+            self._play_sfx("asteroid_split")
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1673,6 +1755,7 @@ class Game:
             return
         self.shield_active = True
         self.shield_hit_asteroids.clear()
+        self._play_sfx("shield_activated")
 
     def _get_shield_params(self):
         """Get shield parameters for the current power level.
@@ -1763,6 +1846,9 @@ class Game:
                 # Collision! Mark asteroid as hit this frame
                 self.shield_hit_asteroids.add(ai)
 
+                # Play shield ram sound
+                self._play_sfx("shield_ram")
+
                 # Bounce ship away from asteroid
                 if distance > 0:
                     # Normalize direction away from asteroid
@@ -1808,6 +1894,7 @@ class Game:
 
         if distance < hit_threshold:
             # Shield destroys the powerup on contact
+            self._play_sfx("powerup_destroyed")
             self.powerup = None
 
     def _hit_asteroid_from_shield(self, asteroid, asteroid_index):
@@ -1825,6 +1912,7 @@ class Game:
             # Destroy — count as a hit
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+            self._play_sfx("asteroid_destroyed")
             self.asteroids.pop(asteroid_index)
         else:
             # Split into 2-3 smaller asteroids
@@ -1834,6 +1922,7 @@ class Game:
 
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
+            self._play_sfx("asteroid_split")
 
             # Remove the parent asteroid
             self.asteroids.pop(asteroid_index)
@@ -1899,6 +1988,7 @@ class Game:
                                self.window_height - POWERUP_RADIUS)
             if self._is_safe_powerup_position(x, y):
                 self.powerup = Powerup(x, y, powerup_type)
+                self._play_sfx("powerup_spawn")
                 self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
 
@@ -1912,6 +2002,7 @@ class Game:
         for cx, cy in corners:
             if self._is_safe_powerup_position(cx, cy):
                 self.powerup = Powerup(cx, cy, powerup_type)
+                self._play_sfx("powerup_spawn")
                 self.powerup_spawn_timer = self._get_powerup_spawn_interval()
                 return
 
@@ -1976,7 +2067,8 @@ class Game:
                 self.laser_active = False
                 self.shield_active = False
 
-            # Remove powerup
+            # Play collection sound and remove powerup
+            self._play_sfx("powerup_collected")
             self.powerup = None
 
     def _check_asteroid_powerup_collision(self):
@@ -1996,12 +2088,14 @@ class Game:
 
             if distance < POWERUP_RADIUS + asteroid.radius:
                 # Powerup destroyed
+                self._play_sfx("powerup_destroyed")
                 self.powerup = None
 
                 # Asteroid is hit (split or destroy)
                 if asteroid.radius < ASTEROID_DESTRUCTION_RADIUS:
                     self.hit_count += 1
                     self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+                    self._play_sfx("asteroid_destroyed")
                     self.asteroids.pop(ai)
                 else:
                     num_splits = random.randint(2, 3)
@@ -2012,6 +2106,7 @@ class Game:
 
                     # Spawn split explosion
                     self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
+                    self._play_sfx("asteroid_split")
 
                     self.asteroids.pop(ai)
                     for _ in range(num_splits):
@@ -2034,12 +2129,32 @@ class Game:
 
         Particles are ejected from the ship's rear in the opposite direction
         of the ship's facing, with a slight random spread.
+        Also manages the looping thruster sound effect.
         """
         if self.current_mode != MODE_GAME:
+            # Not in game mode — stop thruster sound if playing
+            if self._thruster_sfx_playing:
+                pygame.mixer.Sound.stop(self.sfx["thrusters"])
+                self._thruster_sfx_playing = False
             return
 
         keys = pygame.key.get_pressed()
-        if not keys[pygame.K_UP]:
+        thrusting = keys[pygame.K_UP]
+
+        # Manage thruster sound: loop while thrusting, stop when not
+        if self.sound_enabled:
+            if thrusting and not self._thruster_sfx_playing:
+                self.sfx["thrusters"].play(-1)  # -1 = loop forever
+                self._thruster_sfx_playing = True
+            elif not thrusting and self._thruster_sfx_playing:
+                pygame.mixer.Sound.stop(self.sfx["thrusters"])
+                self._thruster_sfx_playing = False
+        elif self._thruster_sfx_playing:
+            # Sound was toggled off while thrusting — kill the loop
+            pygame.mixer.Sound.stop(self.sfx["thrusters"])
+            self._thruster_sfx_playing = False
+
+        if not thrusting:
             return
 
         # Ship rear position (opposite of tip)
@@ -2174,6 +2289,7 @@ class Game:
             ("Time: " + time_str, COLOR_WHITE),
             ("Weapon: " + self.weapon_type, weapon_color),
             ("Power: " + str(self.weapon_power), weapon_color),
+            ("Sound: " + ("on" if self.sound_enabled else "off"), COLOR_WHITE),
         ]
 
         # Determine if we need a charge bar line
@@ -2409,6 +2525,10 @@ class Game:
                 self._spawn_explosion(
                     self.ship.x, self.ship.y, SHIP_RADIUS, True
                 )
+                self._play_sfx("ship_destroyed_asteroid")
+                if self._thruster_sfx_playing:
+                    pygame.mixer.Sound.stop(self.sfx["thrusters"])
+                    self._thruster_sfx_playing = False
                 self.current_mode = MODE_GAMEOVER
                 self.gameover_reason = ""
                 return True
@@ -2475,6 +2595,10 @@ class Game:
                 self._spawn_explosion(
                     self.ship.x, self.ship.y, SHIP_RADIUS, True
                 )
+                self._play_sfx("ship_destroyed_friendly_fire")
+                if self._thruster_sfx_playing:
+                    pygame.mixer.Sound.stop(self.sfx["thrusters"])
+                    self._thruster_sfx_playing = False
                 self.current_mode = MODE_GAMEOVER
                 self.gameover_reason = "Friendly fire!"
                 return
@@ -2501,6 +2625,7 @@ class Game:
             if distance < POWERUP_RADIUS:
                 # Hit! Remove projectile and destroy powerup
                 projectiles_to_remove.add(pi)
+                self._play_sfx("powerup_destroyed")
                 self.powerup = None
                 break  # Powerup is gone, no more collisions possible
 
@@ -2527,6 +2652,7 @@ class Game:
             # Destroy — count as a hit
             self.hit_count += 1
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, True)
+            self._play_sfx("asteroid_destroyed")
         else:
             # Split into 2-3 smaller asteroids
             num_splits = random.randint(2, 3)
@@ -2535,6 +2661,7 @@ class Game:
 
             # Spawn split explosion
             self._spawn_explosion(asteroid.x, asteroid.y, asteroid.radius, False)
+            self._play_sfx("asteroid_split")
 
             for _ in range(num_splits):
                 angle = random.uniform(0, 360)

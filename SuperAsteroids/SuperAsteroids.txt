@@ -156,14 +156,15 @@ Each weapon has three levels of power, which affects its abilities. The player s
 level 1.
 
 Every 30 seconds of gameplay, a circular "powerup" icon of radius 20 pixels will appear randomly on the screen. The 
-icon can never appear directly on the player's ship or directly in contact with any asteroid. The icon's color
-and label are randomly selected from the following list:
+icon can never appear directly on the player's ship or directly in contact with any asteroid. The icon is indestructible
+for the first 60 frames of its existence to avoid accidental instant collision with nearby asteroids or projectiles.
+The icon's color and label are randomly selected from the following list:
 
 - White letter "C" on a yellow circle: this represents a Cannon powerup.
 - White letter "L" on a light blue circle: this represents a Laser powerup.
 - White letter "S" on a red circle: this represents a Shield powerup.
 
-Only ONE such icon can appear on screen at a time. The circle drifts at a speed of 2 pixels per frame in a randomly
+The icon drifts at a speed of 2 pixels per frame in a randomly
 chosen direction. If the icon impacts an asteroid of any size, it is destroyed and removed from the screen. This
 counts as an asteroid hit (update the hit counter in the HUD if necessary)! The asteroid that impacted it will 
 be split or destroyed according to the usual asteroid impact rules.
@@ -178,6 +179,15 @@ adjusted according to the following rules:
 
 Current weapon, power level, and charge level (if applicable) are maintained when advancing levels. 
 When restarting a game at level 1, the player is always reset to the Cannon at power level 1.
+
+Additionally, asteroids have a small random chance of spawning a new random powerup icon on every asteroid split
+or asteroid destruction event. The chance of this decreases as the level advances:
+
+- level 1: 8% chance
+- level 2: 6% chance
+- level 3: 4% chance
+- level 4: 2% chance
+- level 5 and up: 1% chance
 
 ### Cannon
 
@@ -277,4 +287,12 @@ never any other color.
 
 Resizing the window during Game Mode may cause the positions of asteroids to be fully off-screen. This should trigger 
 an immediate forced screen wrap so that the asteroid reappears as soon as the resize completes.
+
+## Sound
+
+The game has no background music, but it does have sound effects. There are several wav audio files in the `sfx` subdirectory.
+These will be packaged with the game. Load them into memory on startup (with graceful exit and friendly error message
+if any fail to load). There is a README.md in the sfx subdirectory that contains instructions as to which sound
+effects are associated with which game events.
+
 

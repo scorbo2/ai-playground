@@ -143,6 +143,7 @@
 
 - Powerup icon: 20 px radius circle, labeled "C" (yellow), "L" (light blue), or "S" (red), white letter
 - Spawns every 30 seconds of gameplay at random position (not on ship or asteroids)
+- Icon is indestructible for the first 60 frames of its existence (can be collected by player's ship but is immune to all other collisions)
 - Drifts at 2 px/frame in random direction
 - Only one powerup on screen at a time
 - Asteroid collision with powerup → powerup destroyed, asteroid is split or destroyed
@@ -152,6 +153,8 @@
   - Different weapon type → switch to that type, power resets to 1
 - Weapon state persists across levels, resets on game restart (Cannon power 1)
 - HUD updates: weapon name in appropriate color, power level in matching color
+- Asteroid splits and destruction events have a small random chance of spawning a new powerup icon at the point of impact:
+  - Chance starts at 8% at level 1 and decreases by 2% for every subsequent level, with a minimum chance of 1%
 
 ---
 
@@ -204,6 +207,18 @@
   - when max or min brightness is achieved, reverse the direction and continue
   - star brightness changes at 0.1% per frame
   - max brightness = pure white, min brightness = black
+
+---
+
+## Stage 11: Sound effects
+
+**Goal:** Full sound support (sound effects only, no game music)
+
+- Load `sfx/*.wav` on startup and cache each sound effect in memory
+- `sfx/README.md` contains a table indicating which effects map to which in-game events
+- Pressing `F2` in Game Mode toggles sound on/off. Defaults to on, toggle is only available in Game Mode.
+- Audio toggle state persists across levels and also when starting a new game.
+- Thruster sound effect should loop for as long as the thruster key is held. All other effects simply play once per associated game event.
 
 ---
 
