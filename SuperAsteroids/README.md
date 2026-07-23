@@ -25,7 +25,8 @@ addressed before moving on to the next development stage. But by having clear st
 with clear testing goals, we were able to lock down each stage one by one until the whole
 game was complete.
 
-TODO insert YouTube link once it's up.
+See the result in the [Spec-driven development vs One-shot prompting](https://www.youtube.com/watch?v=dyYzs-mVkKo)
+video on YouTube!
 
 ## Post-completion changes
 
