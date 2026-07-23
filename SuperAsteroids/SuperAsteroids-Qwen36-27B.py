@@ -313,8 +313,7 @@ SFX_FILES = {
 # Starfield
 STARFIELD_MIN_COUNT = 100     # minimum number of stars
 STARFIELD_MAX_COUNT = 200     # maximum number of stars
-STAR_TWINKLE_RATE_MIN = 0.015 # minimum twinkle speed (1.5% of 0-255 range)
-STAR_TWINKLE_RATE_MAX = 0.04  # maximum twinkle speed (4% of 0-255 range)
+STAR_TWINKLE_RATE = 0.001     # fixed 0.1% per frame (fractional, accumulated)
 STAR_MIN_BRIGHTNESS = 0       # black
 STAR_MAX_BRIGHTNESS = 255     # pure white
 
@@ -359,7 +358,9 @@ class Star:
     """A single twinkling star for the background starfield.
 
     Rendered as a single pixel with grayscale color. Brightness oscillates
-    between black and white at a slow rate, creating a twinkle effect.
+    between black and white at a fixed slow rate (0.1% per frame), creating
+    a twinkle effect. Fractional brightness is accumulated internally so
+    that sub-integer changes still produce visible oscillation over time.
     """
 
     def __init__(self, x, y):
@@ -371,26 +372,34 @@ class Star:
         """
         self.x = x
         self.y = y
-        # Random initial brightness (0-255)
-        self.brightness = random.randint(
+        # Random initial fractional brightness (0.0 – 255.0)
+        self._brightness = random.uniform(
             STAR_MIN_BRIGHTNESS, STAR_MAX_BRIGHTNESS
         )
         # Random twinkle direction: +1 (brightening) or -1 (dimming)
         self.direction = random.choice([-1, 1])
-        # Per-star twinkle speed (2-6% of 0-255 range per frame)
-        self.twinkle_rate = random.uniform(
-            STAR_TWINKLE_RATE_MIN, STAR_TWINKLE_RATE_MAX
-        )
 
     def update(self):
-        """Update star brightness with twinkle effect."""
-        self.brightness += int(self.twinkle_rate * 255) * self.direction
-        if self.brightness >= STAR_MAX_BRIGHTNESS:
-            self.brightness = STAR_MAX_BRIGHTNESS
+        """Update star brightness with twinkle effect.
+
+        Each frame, brightness changes by 0.1% of the 0–255 range
+        (0.255 units). The fractional value is accumulated so the
+        star still oscillates smoothly despite sub-integer steps.
+        Direction reverses at the black (0) and white (255) extremes.
+        """
+        step = STAR_TWINKLE_RATE * STAR_MAX_BRIGHTNESS * self.direction
+        self._brightness += step
+        if self._brightness >= STAR_MAX_BRIGHTNESS:
+            self._brightness = STAR_MAX_BRIGHTNESS
             self.direction = -1
-        elif self.brightness <= STAR_MIN_BRIGHTNESS:
-            self.brightness = STAR_MIN_BRIGHTNESS
+        elif self._brightness <= STAR_MIN_BRIGHTNESS:
+            self._brightness = STAR_MIN_BRIGHTNESS
             self.direction = 1
+
+    @property
+    def brightness(self):
+        """Return the integer brightness for rendering (0–255)."""
+        return int(self._brightness)
 
     def draw(self, screen):
         """Render the star as a single grayscale pixel.
@@ -2797,6 +2806,9 @@ class Game:
         # After fullscreen toggle, force-wrap asteroids to new dimensions
         for asteroid in self.asteroids:
             asteroid.force_wrap(self.window_width, self.window_height)
+
+        # Adjust starfield to fill the new screen dimensions
+        self._adjust_starfield()
 
     # ── Update ───────────────────────────────────────────────────────────
 
