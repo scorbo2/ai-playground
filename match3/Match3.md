@@ -64,22 +64,26 @@ Each level must start with all cells containing one token, with no horizontal or
 than 2 tokens of the same color. There is no time limit or clock displayed. The player can click any cell
 to select it. The immediate horizontal and vertical neighbors of the selected cell become movement options.
 There is NO board wrap. That is, clicking a cell in the leftmost column does NOT indicate a cell in the 
-rightmost column of the same row as a movement option. 
+rightmost column of the same row as a movement option. Clicking a cell that is already selected should
+deselect that cell, causing it and its immediate horizontal and vertical neighbors to revert to their
+default border and fill colors.
 
 Once a cell is selected, the player can click any movement option cell to swap the tokens between the selected
 cell and the chosen movement option cell. The swap ONLY occurs if the move is valid. A move is only valid if
 the proposed token swap would result in a horizontal or vertical formation of three or more tokens of the same
 color. If the proposed swap is not valid, the selected cell and the chosen movement option cell should 
 temporarily flash red: their borders change to light red, and their background fill colors change to dark red.
-After 300ms, their colors revert back. This indicates that the proposed move is not valid.
+After 300ms, their colors revert back. This indicates that the proposed move is not valid. The selected cell
+remains selected after indicating an invalid move, and the immediately neighboring cells are still shown
+as movement options.
 
 If the proposed movement is valid, the tokens are swapped. Token movement should be animated instead of 
 instantaneous. During animation, no mouse input is allowed on the game board. The movement animation should not
-take longer than 500ms. Once the animation completes, any horizontally or vertically adjacent tokens are removed
-from the board, the player's score is adjusted accordingly, and all tokens above "fall" to fill the void
-in the game board as needed. This "falling" should also be animated, at the same speed as the token swap
-animation - that is, the time it takes for a token to "fall" from a higher cell to a lower cell should
-not exceed 500ms.
+take longer than 500ms. Once the token swap animation completes, all newly-formed horizontally or vertically contiguous
+groups of three or more tokens of the same color are removed from the board. The player's score is updated
+according to the scoring rules, and then all tokens above the now-empty cells "fall" to fill the empty cells
+on the game board as needed. New random tokens then "fall" from the top of the board to fill the empty cells at the 
+tops of the affected columns. This "falling" should also be animated.
 
 Implementation suggestion: maintain a single 2D array as the sole source of truth for board state (token colors).
 After any match, gravity should be resolved per-column by extracting all remaining non-null tokens in order, 
@@ -91,12 +95,12 @@ state can go stale relative to the underlying board.
 ## Advancing levels
 
 Level 1 has a score threshold of 100 points. When this threshold is met or exceeded, the text
-"LEVEL COMPLETE!" appears in large non-transparent light blue font over the game board. This should replace
+"LEVEL COMPLETE!" appears in large opaque light blue font over the game board. This should replace
 any other text that is currently showing. This "LEVEL COMPLETE!" text remains
-visible for 2s (no mouse input is allowed during this period, and all animation stops during this period.
+visible for 2s (no mouse input is allowed during this period, and all animation stops during this period).
 The board then "resets", all cells revert to non-selected status, and the next level begins. Each level
 adds 50 to the score threshold required to advance to the next level. The text "BEGIN LEVEL N" should
-briefly appear over the game board in large semi-transparent pink font, where N is the 1-based level number.
+briefly appear over the game board in large opaque pink font, where N is the 1-based level number.
 
 The player's score resets to 0 on each new level. 
 
@@ -112,12 +116,18 @@ and/or vertical chains of three or more same-color tokens will be formed. These 
 and follow the same animation rules as a regular removal. However, such "chained" removals have double the point
 value of a regular removal. This doubling effect can stack, if yet another three-or-more grouping is formed
 as a result of the removal. The text "NICE!" should briefly flash in semi-transparent large white font on top
-of the game board (unless the matched tokens were red). 
+of the game board (unless the matched tokens were red). There is no upper limit to this 2x chaining bonus!
 
-### Matching more than 3
+If a chained match leads to another chained match, the text message "NICE!" should change accordingly:
 
-Contiguous token chains (horizontal or vertical) consisting of more than 3 tokens are worth 1 extra point per token
-for each additional token in the chain. For example, matching 4 tokens at once would earn the player 5 points (one
+- on a third chained match: "VERY NICE!" in semi-transparent large orange font
+- on a fourth changed match: "AMAZING!!" in semi-transparent large green font
+- on a fifth or subsequent chained match: "HOLY COW!" in semi-transparent very large light blue font
+
+### Matching more than 3 tokens
+
+Contiguous token groups (horizontal or vertical) consisting of more than 3 tokens are worth 1 extra point per token
+for each additional token in the group. For example, matching 4 tokens at once would earn the player 5 points (one
 point per token removed plus one extra point for matching a group of 4). Matching 5 tokens would earn the player
 7 points (one point per token removed, plus two points for an extra long group). The text "BONUS!" should briefly
 flash in semi-transparent large green font on top of the game board (unless the matched tokens were red).
@@ -126,7 +136,7 @@ flash in semi-transparent large green font on top of the game board (unless the 
 
 It's possible for a single token swap to generate two separate-color groups of three or more tokens. There are 
 no special scoring rules for such a multi-match. But, the text "MULTI-MATCH!" should briefly appear in large
-semi-transparent font on top of the game board.
+semi-transparent light blue font on top of the game board.
 
 ### Matching red tokens
 
@@ -153,7 +163,8 @@ all cells to their normal border/fill colors. No cell is considered selected aft
 During animation, the game board should disallow mouse input on the game board. But the "reset" button in
 the side bar should **never** be blocked. The user can click "reset" at any time, even if an animation is in
 progress. Clicking reset cancels all animations in progress, removes any displayed text, and resets the board
-immediately. Resetting the board also cancels any current cell selection.
+immediately. Resetting the board also cancels any current cell selection. The player's score reverts to 0 and
+play begins again at level 1.
 
 ### Text animation
 
@@ -166,18 +177,19 @@ Exceptions to this rule:
 - "LEVEL COMPLETE!"
 - "NO MOVES - GAME OVER"
 
-These messages are special, and should always appear exactly centered and unmoving. 
-All other text messages should be hidden immediately, and any animation in progress should be stopped.
+These messages are special, and should always appear exactly centered and unmoving. If either of these
+special messages are displayed, all other text messages should be hidden immediately, 
+and any animation in progress should be stopped.
 
 ## Unsolvable boards
 
-It's possible for the game board to enter a state where there are no legal moves. This ends the game.
-Show the text "NO MOVES - GAME OVER" in large non-transparent light red text over the game board.
+It's possible for the game board to enter a state where there are no valid moves. This ends the game.
+Show the text "NO MOVES - GAME OVER" in large opaque light red text over the game board.
 The only option for the user at this point is to click the "reset" button.
 
 ## Game format
 
 The game should exist as a single, self-contained Html file. Use vanilla JS, CSS Grid/Flexbox for layout,
 and requestAnimationFrame or CSS transitions for animations. Do not use external libraries.
-
+The game has no audio.
 
