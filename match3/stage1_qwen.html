@@ -1,0 +1,1147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MATCH 3</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background-color: #b3d9ff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    user-select: none;
+  }
+
+  /* Main wrapper: title bar spans board + sidebar width */
+  .game-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .title-bar {
+    width: calc(8 * 60px + 200px + 40px); /* board + gap + sidebar */
+    height: 48px;
+    background-color: #000;
+    border: 4px solid #444;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: 28px;
+    font-weight: bold;
+    letter-spacing: 4px;
+  }
+
+  .title-spacer {
+    height: 40px;
+  }
+
+  .game-area {
+    display: flex;
+    gap: 40px;
+    align-items: flex-start;
+  }
+
+  /* Game board */
+  .board-container {
+    position: relative;
+    border: 4px solid #444;
+    background-color: #000;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, 60px);
+    grid-template-rows: repeat(8, 60px);
+    gap: 0;
+    position: relative; /* tokens are positioned absolutely relative to this */
+  }
+
+  .cell {
+    width: 60px;
+    height: 60px;
+    border: 1px solid #ccc;
+    background-color: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    cursor: pointer;
+  }
+
+  .cell.selected {
+    border-color: #90ee90;
+    background-color: #006400;
+  }
+
+  .cell.movement-option {
+    border-color: #90ee90;
+    background-color: #333;
+  }
+
+  .cell.invalid-flash {
+    border-color: #ff6666;
+    background-color: #8b0000;
+  }
+
+  .board-container.flash-red {
+    border-color: #8b0000;
+  }
+
+  /* Token */
+  .token {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    position: absolute;
+    transition: top 0.4s ease-in, left 0.4s ease-in;
+    z-index: 2;
+    pointer-events: none; /* clicks pass through to cells beneath */
+  }
+
+  .token.removing {
+    transition: opacity 0.2s ease-out;
+    opacity: 0;
+  }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px;
+    height: 480px; /* 8 * 60px */
+    background-color: #000;
+    border: 4px solid #444;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px 10px;
+    gap: 16px;
+  }
+
+  .sidebar-label {
+    color: #fff;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .sidebar-value {
+    color: #fff;
+    font-size: 28px;
+    font-weight: bold;
+  }
+
+  .sidebar-value.negative-score {
+    color: #ff6666;
+  }
+
+  .sidebar-divider {
+    width: 80%;
+    height: 1px;
+    background-color: #555;
+  }
+
+  .restart-btn {
+    margin-top: 20px;
+    padding: 10px 24px;
+    background-color: #333;
+    color: #fff;
+    border: 2px solid #666;
+    border-radius: 4px;
+    font-size: 16px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    z-index: 100;
+  }
+
+  .restart-btn:hover {
+    background-color: #555;
+  }
+
+  /* Overlay text */
+  .overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 480px; /* 8 * 60px */
+    height: 480px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 50;
+    overflow: hidden;
+  }
+
+  .overlay-text {
+    font-size: 36px;
+    font-weight: bold;
+    text-align: center;
+    opacity: 0;
+    position: absolute;
+    white-space: nowrap;
+    text-shadow: 0 0 10px rgba(0,0,0,0.5);
+  }
+
+  .overlay-text.fixed {
+    /* LEVEL COMPLETE, GAME OVER - stay centered */
+  }
+
+  /* Particle canvas */
+  .particle-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 480px;
+    height: 480px;
+    pointer-events: none;
+    z-index: 40;
+  }
+
+  /* Block input during animation */
+  .board-container.blocked {
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div class="game-wrapper">
+  <div class="title-bar">MATCH 3</div>
+  <div class="title-spacer"></div>
+  <div class="game-area">
+    <div class="board-container" id="boardContainer">
+      <div class="board" id="board"></div>
+      <div class="overlay" id="overlay"></div>
+      <canvas class="particle-canvas" id="particleCanvas" width="480" height="480"></canvas>
+    </div>
+    <div class="sidebar">
+      <div>
+        <div class="sidebar-label">Level</div>
+        <div class="sidebar-value" id="levelDisplay">1</div>
+      </div>
+      <div class="sidebar-divider"></div>
+      <div>
+        <div class="sidebar-label">Score</div>
+        <div class="sidebar-value" id="scoreDisplay">0</div>
+      </div>
+      <div class="sidebar-divider"></div>
+      <div>
+        <div class="sidebar-label">Target</div>
+        <div class="sidebar-value" id="targetDisplay">100</div>
+      </div>
+      <button class="restart-btn" id="restartBtn">Restart</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CONSTANTS
+// ============================================================
+const ROWS = 8;
+const COLS = 8;
+const CELL_SIZE = 60;
+const COLORS = ['#FF0000', '#00CC00', '#0066FF', '#FF8800', '#FFDD00', '#FF00CC'];
+const COLOR_NAMES = ['red', 'green', 'blue', 'orange', 'yellow', 'pink'];
+const RED_INDEX = 0;
+const ANIM_DURATION = 400; // ms for swap/fall animations
+
+// ============================================================
+// GAME STATE
+// ============================================================
+let board = [];          // 2D array: board[row][col] = color index or -1 (empty)
+let tokens = [];         // DOM elements for tokens, tokens[row][col]
+let selected = null;     // {row, col} or null
+let level = 1;
+let score = 0;
+let target = 100;
+let isAnimating = false;
+let isGameOver = false;
+let animFrameIds = [];   // track all animation frames for cancellation
+let overlayTimeoutIds = []; // track overlay timeouts
+
+// ============================================================
+// DOM REFS
+// ============================================================
+const boardEl = document.getElementById('board');
+const boardContainer = document.getElementById('boardContainer');
+const overlayEl = document.getElementById('overlay');
+const particleCanvas = document.getElementById('particleCanvas');
+const pCtx = particleCanvas.getContext('2d');
+const levelDisplay = document.getElementById('levelDisplay');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const targetDisplay = document.getElementById('targetDisplay');
+const restartBtn = document.getElementById('restartBtn');
+
+// ============================================================
+// INITIALIZATION
+// ============================================================
+function init() {
+  // Clear everything
+  cancelAllAnimations();
+  boardEl.innerHTML = '';
+  overlayEl.innerHTML = '';
+  pCtx.clearRect(0, 0, 480, 480);
+  boardContainer.classList.remove('blocked', 'flash-red');
+
+  level = 1;
+  score = 0;
+  target = 100;
+  isAnimating = false;
+  isGameOver = false;
+  selected = null;
+
+  updateSidebar();
+  createBoard();
+  generateBoard();
+}
+
+function createBoard() {
+  boardEl.innerHTML = '';
+  board = [];
+  tokens = [];
+
+  for (let r = 0; r < ROWS; r++) {
+    board[r] = [];
+    tokens[r] = [];
+    for (let c = 0; c < COLS; c++) {
+      board[r][c] = -1;
+      tokens[r][c] = null;
+
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+      cell.addEventListener('click', () => onCellClick(r, c));
+      boardEl.appendChild(cell);
+
+      // Store cell ref
+      cell._row = r;
+      cell._col = c;
+    }
+  }
+}
+
+// Get the cell DOM element at (row, col)
+function getCell(r, c) {
+  return boardEl.children[r * COLS + c];
+}
+
+// Generate a board with no initial matches of 3+
+function generateBoard() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      let color;
+      do {
+        color = Math.floor(Math.random() * COLORS.length);
+      } while (wouldCreateMatch(r, c, color));
+      board[r][c] = color;
+      spawnToken(r, c, color);
+    }
+  }
+}
+
+function wouldCreateMatch(r, c, color) {
+  // Check horizontal: would placing color at (r,c) create 3+ in a row?
+  let left = 0;
+  for (let i = c - 1; i >= 0 && board[r][i] === color; i--) left++;
+  let right = 0;
+  for (let i = c + 1; i < COLS && board[r][i] === color; i++) right++;
+  if (left + right + 1 >= 3) return true;
+
+  // Check vertical
+  let up = 0;
+  for (let i = r - 1; i >= 0 && board[i][c] === color; i--) up++;
+  let down = 0;
+  for (let i = r + 1; i < ROWS && board[i][c] === color; i++) down++;
+  if (up + down + 1 >= 3) return true;
+
+  return false;
+}
+
+function spawnToken(r, c, color) {
+  const token = document.createElement('div');
+  token.className = 'token';
+  token.style.backgroundColor = COLORS[color];
+  // Board-relative positioning: all tokens are children of boardEl
+  token.style.top = (r * CELL_SIZE + 5) + 'px';
+  token.style.left = (c * CELL_SIZE + 5) + 'px';
+  boardEl.appendChild(token);
+  tokens[r][c] = token;
+}
+
+// Ensure all tokens are direct children of boardEl with board-relative positioning.
+// Called before gravity and after swaps as a safety net — tokens spawned by
+// spawnToken and fillEmpty are already board children, but this catches any
+// code path that could leave parentage inconsistent.
+function normalizeTokenParentage() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const token = tokens[r][c];
+      if (token && token.parentElement !== boardEl) {
+        boardEl.appendChild(token);
+        // Reset to board-relative position (no transition — this is a correction)
+        token.style.transition = 'none';
+        token.style.top = (r * CELL_SIZE + 5) + 'px';
+        token.style.left = (c * CELL_SIZE + 5) + 'px';
+        token.offsetHeight; // force reflow
+        token.style.transition = '';
+      }
+    }
+  }
+}
+
+// ============================================================
+// INPUT HANDLING
+// ============================================================
+function onCellClick(r, c) {
+  if (isAnimating || isGameOver) return;
+
+  clearInvalidFlashes();
+
+  if (selected === null) {
+    // Select this cell
+    selectCell(r, c);
+  } else if (selected.row === r && selected.col === c) {
+    // Deselect
+    deselectAll();
+  } else if (isNeighbor(selected.row, selected.col, r, c)) {
+    // Try swap
+    attemptSwap(selected.row, selected.col, r, c);
+  } else {
+    // Select new cell
+    deselectAll();
+    selectCell(r, c);
+  }
+}
+
+function selectCell(r, c) {
+  selected = { row: r, col: c };
+  getCell(r, c).classList.add('selected');
+  highlightNeighbors(r, c);
+}
+
+function deselectAll() {
+  if (selected) {
+    getCell(selected.row, selected.col).classList.remove('selected');
+  }
+  selected = null;
+  // Clear movement options
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      getCell(r, c).classList.remove('movement-option');
+    }
+  }
+}
+
+function highlightNeighbors(r, c) {
+  const neighbors = getNeighbors(r, c);
+  for (const n of neighbors) {
+    getCell(n.row, n.col).classList.add('movement-option');
+  }
+}
+
+function getNeighbors(r, c) {
+  const neighbors = [];
+  if (r > 0) neighbors.push({ row: r - 1, col: c });
+  if (r < ROWS - 1) neighbors.push({ row: r + 1, col: c });
+  if (c > 0) neighbors.push({ row: r, col: c - 1 });
+  if (c < COLS - 1) neighbors.push({ row: r, col: c + 1 });
+  return neighbors;
+}
+
+function isNeighbor(r1, c1, r2, c2) {
+  return (Math.abs(r1 - r2) + Math.abs(c1 - c2)) === 1;
+}
+
+// ============================================================
+// SWAP LOGIC
+// ============================================================
+async function attemptSwap(r1, c1, r2, c2) {
+  // Temporarily swap in the board data
+  const temp = board[r1][c1];
+  board[r1][c1] = board[r2][c2];
+  board[r2][c2] = temp;
+
+  const matches = findAllMatches();
+
+  if (matches.length === 0) {
+    // Invalid move - swap back in data
+    board[r2][c2] = board[r1][c1];
+    board[r1][c1] = temp;
+
+    // Flash invalid
+    flashInvalid(r1, c1, r2, c2);
+    deselectAll();
+    return;
+  }
+
+  // Valid move - deselect and animate swap
+  deselectAll();
+  boardContainer.classList.add('blocked');
+  isAnimating = true;
+
+  await animateSwap(r1, c1, r2, c2);
+
+  // Swap tokens in the DOM and in the data
+  swapTokensInDOM(r1, c1, r2, c2);
+
+  // Normalize: ensure every token is a direct child of boardEl
+  normalizeTokenParentage();
+
+  // Process matches
+  await processMatches(1);
+}
+
+function flashInvalid(r1, c1, r2, c2) {
+  const cell1 = getCell(r1, c1);
+  const cell2 = getCell(r2, c2);
+  cell1.classList.add('invalid-flash');
+  cell2.classList.add('invalid-flash');
+
+  const id = setTimeout(() => clearInvalidFlashes(), 300);
+  overlayTimeoutIds.push(id);
+}
+
+function clearInvalidFlashes() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      getCell(r, c).classList.remove('invalid-flash');
+    }
+  }
+  boardContainer.classList.remove('flash-red');
+}
+
+// ============================================================
+// ANIMATION: SWAP
+// ============================================================
+function animateSwap(r1, c1, r2, c2) {
+  return new Promise(resolve => {
+    const t1 = tokens[r1][c1];
+    const t2 = tokens[r2][c2];
+
+    // Swap visual positions (board-relative)
+    if (t1) {
+      t1.style.top = (r2 * CELL_SIZE + 5) + 'px';
+      t1.style.left = (c2 * CELL_SIZE + 5) + 'px';
+    }
+    if (t2) {
+      t2.style.top = (r1 * CELL_SIZE + 5) + 'px';
+      t2.style.left = (c1 * CELL_SIZE + 5) + 'px';
+    }
+
+    const id = setTimeout(resolve, ANIM_DURATION);
+    animFrameIds.push(id);
+  });
+}
+
+function swapTokensInDOM(r1, c1, r2, c2) {
+  // After animation: t1 is visually at (r2,c2), t2 is visually at (r1,c1).
+  // Swap array refs so tokens[r1][c1]=t2 and tokens[r2][c2]=t1,
+  // then snap each to its new visual position to confirm with transition disabled.
+  const t1 = tokens[r1][c1];
+  const t2 = tokens[r2][c2];
+
+  tokens[r1][c1] = t2;
+  tokens[r2][c2] = t1;
+
+  // t1 is now at array position (r2,c2) — snap to (r2,c2)
+  if (t1) {
+    t1.style.transition = 'none';
+    t1.style.top = (r2 * CELL_SIZE + 5) + 'px';
+    t1.style.left = (c2 * CELL_SIZE + 5) + 'px';
+    t1.offsetHeight; // force reflow
+    t1.style.transition = '';
+  }
+
+  // t2 is now at array position (r1,c1) — snap to (r1,c1)
+  if (t2) {
+    t2.style.transition = 'none';
+    t2.style.top = (r1 * CELL_SIZE + 5) + 'px';
+    t2.style.left = (c1 * CELL_SIZE + 5) + 'px';
+    t2.offsetHeight; // force reflow
+    t2.style.transition = '';
+  }
+}
+
+// ============================================================
+// MATCH DETECTION
+// ============================================================
+function findAllMatches() {
+  const matched = new Set();
+
+  // Horizontal
+  for (let r = 0; r < ROWS; r++) {
+    let runLen = 1;
+    for (let c = 1; c < COLS; c++) {
+      if (board[r][c] === board[r][c - 1] && board[r][c] !== -1) {
+        runLen++;
+      } else {
+        if (runLen >= 3) {
+          for (let i = c - runLen; i < c; i++) {
+            matched.add(r * COLS + i);
+          }
+        }
+        runLen = 1;
+      }
+    }
+    if (runLen >= 3) {
+      for (let i = COLS - runLen; i < COLS; i++) {
+        matched.add(r * COLS + i);
+      }
+    }
+  }
+
+  // Vertical
+  for (let c = 0; c < COLS; c++) {
+    let runLen = 1;
+    for (let r = 1; r < ROWS; r++) {
+      if (board[r][c] === board[r - 1][c] && board[r][c] !== -1) {
+        runLen++;
+      } else {
+        if (runLen >= 3) {
+          for (let i = r - runLen; i < r; i++) {
+            matched.add(i * COLS + c);
+          }
+        }
+        runLen = 1;
+      }
+    }
+    if (runLen >= 3) {
+      for (let i = ROWS - runLen; i < ROWS; i++) {
+        matched.add(i * COLS + c);
+      }
+    }
+  }
+
+  // Convert set to array of {row, col}
+  return Array.from(matched).map(idx => ({
+    row: Math.floor(idx / COLS),
+    col: idx % COLS
+  }));
+}
+
+// ============================================================
+// MATCH PROCESSING (recursive for chains)
+// ============================================================
+async function processMatches(chainLevel) {
+  const matches = findAllMatches();
+
+  if (matches.length === 0) {
+    // No more matches - check for level complete or no moves
+    isAnimating = false;
+    boardContainer.classList.remove('blocked');
+
+    if (score >= target) {
+      await showLevelComplete();
+      return;
+    }
+
+    if (!hasValidMoves()) {
+      showGameOver();
+    }
+    return;
+  }
+
+  // Calculate score and show text overlays
+  const { points, groups, hasRed, hasBonus, chainMultiplier } = calculateMatchScore(matches, chainLevel);
+  score += points;
+  updateSidebar();
+
+  // Determine overlay texts
+  const texts = [];
+
+  if (hasRed) {
+    texts.push({ text: 'OH NO!', color: 'rgba(255,100,100,0.85)' });
+    boardContainer.classList.add('flash-red');
+    const id = setTimeout(() => boardContainer.classList.remove('flash-red'), 600);
+    overlayTimeoutIds.push(id);
+  }
+
+  if (groups.length > 1) {
+    texts.push({ text: 'MULTI-MATCH!', color: 'rgba(255,255,255,0.85)' });
+  }
+
+  if (hasBonus) {
+    // Only show BONUS if not all groups are red
+    const nonRedBonus = groups.some(g => g.colorIdx !== RED_INDEX && g.count > 3);
+    if (nonRedBonus) {
+      texts.push({ text: 'BONUS!', color: 'rgba(100,255,100,0.85)' });
+    }
+  }
+
+  if (chainLevel > 1 && !hasRed) {
+    texts.push({ text: 'NICE!', color: 'rgba(255,255,255,0.85)' });
+  }
+
+  // Spawn particles for each matched cell
+  spawnParticles(matches);
+
+  // Animate removal
+  await animateRemoval(matches);
+
+  // Remove from board
+  for (const m of matches) {
+    board[m.row][m.col] = -1;
+    if (tokens[m.row][m.col]) {
+      tokens[m.row][m.col].remove();
+      tokens[m.row][m.col] = null;
+    }
+  }
+
+  // Show overlay texts
+  for (const t of texts) {
+    showOverlayText(t.text, t.color);
+  }
+
+  // Apply gravity (tokens fall)
+  await applyGravity();
+
+  // Fill new tokens from top
+  await fillEmpty();
+
+  // Check for chained matches
+  await processMatches(chainLevel + 1);
+}
+
+// ============================================================
+// SCORING
+// ============================================================
+function calculateMatchScore(matches, chainLevel) {
+  // Group matches by contiguous segments and color
+  const groups = findContiguousGroups(matches);
+  let totalPoints = 0;
+  let hasRed = false;
+  let hasBonus = false;
+
+  for (const group of groups) {
+    const isRed = group.colorIdx === RED_INDEX;
+    if (isRed) hasRed = true;
+
+    // Base: 1 point per token (or -1 for red)
+    let pts = isRed ? -group.count : group.count;
+
+    // Bonus for >3: extra (count - 3) points per token
+    if (group.count > 3) {
+      hasBonus = true;
+      pts += isRed ? -(group.count - 3) : (group.count - 3);
+    }
+
+    // Chain multiplier
+    pts *= chainLevel;
+
+    totalPoints += pts;
+  }
+
+  return { points: totalPoints, groups, hasRed, hasBonus, chainMultiplier: chainLevel };
+}
+
+// Find contiguous groups within the matched set
+function findContiguousGroups(matches) {
+  const matchSet = new Set(matches.map(m => m.row * COLS + m.col));
+  const visited = new Set();
+  const groups = [];
+
+  for (const m of matches) {
+    const idx = m.row * COLS + m.col;
+    if (visited.has(idx)) continue;
+
+    // BFS to find contiguous group of same color
+    const color = board[m.row][m.col];
+    const group = [];
+    const queue = [m];
+    visited.add(idx);
+
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      group.push(curr);
+
+      for (const n of getNeighbors(curr.row, curr.col)) {
+        const nIdx = n.row * COLS + n.col;
+        if (!visited.has(nIdx) && matchSet.has(nIdx) && board[n.row][n.col] === color) {
+          visited.add(nIdx);
+          queue.push(n);
+        }
+      }
+    }
+
+    groups.push({ colorIdx: color, count: group.length });
+  }
+
+  return groups;
+}
+
+// ============================================================
+// ANIMATION: REMOVAL
+// ============================================================
+function animateRemoval(matches) {
+  return new Promise(resolve => {
+    for (const m of matches) {
+      if (tokens[m.row][m.col]) {
+        tokens[m.row][m.col].classList.add('removing');
+      }
+    }
+    const id = setTimeout(resolve, 250);
+    animFrameIds.push(id);
+  });
+}
+
+// ============================================================
+// GRAVITY
+// ============================================================
+async function applyGravity() {
+  // Normalize: ensure every token is a direct child of boardEl with board-relative coords
+  normalizeTokenParentage();
+
+  let maxFall = 0;
+
+  // For each column, compact tokens downward
+  for (let c = 0; c < COLS; c++) {
+    let writeRow = ROWS - 1;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (board[r][c] !== -1) {
+        if (writeRow !== r) {
+          board[writeRow][c] = board[r][c];
+          board[r][c] = -1;
+
+          // Move token DOM element
+          const token = tokens[r][c];
+          tokens[writeRow][c] = token;
+          tokens[r][c] = null;
+
+          if (token) {
+            token.style.transition = 'none';
+            token.style.top = (r * CELL_SIZE + 5) + 'px';
+            token.offsetHeight; // force reflow
+            token.style.transition = '';
+            token.style.top = (writeRow * CELL_SIZE + 5) + 'px';
+
+            const fallDist = writeRow - r;
+            if (fallDist > maxFall) maxFall = fallDist;
+          }
+        }
+        writeRow--;
+      }
+    }
+  }
+
+  // Wait for fall animation to complete (at least ANIM_DURATION, capped at 500ms per spec)
+  if (maxFall > 0) {
+    await delay(Math.min(500, Math.max(ANIM_DURATION, maxFall * 80)));
+  }
+}
+
+// ============================================================
+// FILL EMPTY CELLS
+// ============================================================
+async function fillEmpty() {
+  let maxFall = 0;
+
+  for (let c = 0; c < COLS; c++) {
+    let emptyCount = 0;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (board[r][c] === -1) {
+        emptyCount++;
+      }
+    }
+
+    // Fill from top
+    for (let r = 0; r < emptyCount; r++) {
+      const color = Math.floor(Math.random() * COLORS.length);
+      board[r][c] = color;
+
+      const token = document.createElement('div');
+      token.className = 'token';
+      token.style.backgroundColor = COLORS[color];
+      // Start above the board (board-relative), transition disabled
+      token.style.transition = 'none';
+      token.style.top = ((r - emptyCount) * CELL_SIZE + 5) + 'px';
+      token.style.left = (c * CELL_SIZE + 5) + 'px';
+      boardEl.appendChild(token);
+      tokens[r][c] = token;
+
+      // Force reflow so the browser registers the initial position,
+      // then re-enable transition and set target position
+      token.offsetHeight;
+      token.style.transition = '';
+      token.style.top = (r * CELL_SIZE + 5) + 'px';
+
+      const fallDist = emptyCount - r;
+      if (fallDist > maxFall) maxFall = fallDist;
+    }
+  }
+
+  if (maxFall > 0) {
+    await delay(Math.min(500, Math.max(ANIM_DURATION, maxFall * 80)));
+  }
+}
+
+// ============================================================
+// PARTICLES
+// ============================================================
+function spawnParticles(matches) {
+  const particles = [];
+
+  for (const m of matches) {
+    const cx = (m.col + 0.5) * CELL_SIZE;
+    const cy = (m.row + 0.5) * CELL_SIZE;
+    const color = COLORS[board[m.row][m.col]];
+
+    for (let i = 0; i < 40; i++) {
+      const angle = (Math.PI * 2 * i) / 40 + (Math.random() - 0.5) * 0.5;
+      const speed = 2 + Math.random() * 4;
+      particles.push({
+        x: cx,
+        y: cy,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1.0,
+        decay: 0.015 + Math.random() * 0.02,
+        size: 2 + Math.random() * 4,
+        color: color
+      });
+    }
+  }
+
+  animateParticles(particles);
+}
+
+function animateParticles(particles) {
+  if (particles.length === 0) return;
+
+  function frame() {
+    pCtx.clearRect(0, 0, 480, 480);
+    let alive = false;
+
+    for (const p of particles) {
+      if (p.life <= 0) continue;
+      alive = true;
+
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.05; // slight gravity
+      p.life -= p.decay;
+
+      pCtx.globalAlpha = Math.max(0, p.life);
+      pCtx.fillStyle = p.color;
+      pCtx.beginPath();
+      pCtx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      pCtx.fill();
+    }
+
+    pCtx.globalAlpha = 1;
+
+    if (alive) {
+      const id = requestAnimationFrame(frame);
+      animFrameIds.push(id);
+    } else {
+      pCtx.clearRect(0, 0, 480, 480);
+    }
+  }
+
+  const id = requestAnimationFrame(frame);
+  animFrameIds.push(id);
+}
+
+// ============================================================
+// OVERLAY TEXT
+// ============================================================
+function showOverlayText(text, color, duration = 2000) {
+  const el = document.createElement('div');
+  el.className = 'overlay-text';
+  el.textContent = text;
+  el.style.color = color;
+  el.style.opacity = '1';
+  overlayEl.appendChild(el);
+
+  // Animate: fade out and rise
+  const startTime = performance.now();
+
+  function animateText(now) {
+    const elapsed = now - startTime;
+    const progress = elapsed / duration;
+
+    if (progress >= 1) {
+      el.remove();
+      return;
+    }
+
+    el.style.opacity = String(1 - progress);
+    el.style.transform = `translateY(${-40 * progress}px)`;
+
+    const id = requestAnimationFrame(animateText);
+    animFrameIds.push(id);
+  }
+
+  const id = requestAnimationFrame(animateText);
+  animFrameIds.push(id);
+
+  // Safety cleanup
+  const tid = setTimeout(() => { if (el.parentNode) el.remove(); }, duration + 100);
+  overlayTimeoutIds.push(tid);
+}
+
+function showOverlayTextFixed(text, color, duration = 2000) {
+  return new Promise(resolve => {
+    // Clear any existing overlay text
+    overlayEl.innerHTML = '';
+
+    const el = document.createElement('div');
+    el.className = 'overlay-text fixed';
+    el.textContent = text;
+    el.style.color = color;
+    el.style.opacity = '1';
+    overlayEl.appendChild(el);
+
+    const tid = setTimeout(() => {
+      el.remove();
+      resolve();
+    }, duration);
+    overlayTimeoutIds.push(tid);
+  });
+}
+
+// ============================================================
+// LEVEL COMPLETE
+// ============================================================
+async function showLevelComplete() {
+  boardContainer.classList.add('blocked');
+  overlayEl.innerHTML = ''; // Clear any existing text
+
+  await showOverlayTextFixed('LEVEL COMPLETE!', 'rgba(173,216,230,0.85)', 2000);
+
+  // Advance level
+  level++;
+  score = 0;
+  target = 100 + (level - 1) * 50;
+  updateSidebar();
+
+  // Reset board
+  boardEl.innerHTML = '';
+  createBoard();
+  generateBoard();
+
+  // Show "BEGIN LEVEL N"
+  await showOverlayTextFixed(`BEGIN LEVEL ${level}`, 'rgba(255,105,180,0.85)', 1200);
+
+  isAnimating = false;
+  boardContainer.classList.remove('blocked');
+}
+
+// ============================================================
+// GAME OVER
+// ============================================================
+function showGameOver() {
+  isGameOver = true;
+  overlayEl.innerHTML = '';
+
+  const el = document.createElement('div');
+  el.className = 'overlay-text fixed';
+  el.textContent = 'NO MOVES - GAME OVER';
+  el.style.color = 'rgba(255,100,100,0.85)';
+  el.style.opacity = '1';
+  overlayEl.appendChild(el);
+}
+
+// ============================================================
+// VALID MOVES CHECK
+// ============================================================
+function hasValidMoves() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      // Try swapping right
+      if (c < COLS - 1) {
+        swapBoard(r, c, r, c + 1);
+        if (findAllMatches().length > 0) {
+          swapBoard(r, c, r, c + 1);
+          return true;
+        }
+        swapBoard(r, c, r, c + 1);
+      }
+      // Try swapping down
+      if (r < ROWS - 1) {
+        swapBoard(r, c, r + 1, c);
+        if (findAllMatches().length > 0) {
+          swapBoard(r, c, r + 1, c);
+          return true;
+        }
+        swapBoard(r, c, r + 1, c);
+      }
+    }
+  }
+  return false;
+}
+
+function swapBoard(r1, c1, r2, c2) {
+  const temp = board[r1][c1];
+  board[r1][c1] = board[r2][c2];
+  board[r2][c2] = temp;
+}
+
+// ============================================================
+// UI UPDATES
+// ============================================================
+function updateSidebar() {
+  levelDisplay.textContent = level;
+  scoreDisplay.textContent = score;
+  targetDisplay.textContent = target;
+
+  if (score < 0) {
+    scoreDisplay.classList.add('negative-score');
+  } else {
+    scoreDisplay.classList.remove('negative-score');
+  }
+}
+
+// ============================================================
+// UTILITIES
+// ============================================================
+function delay(ms) {
+  return new Promise(resolve => {
+    const id = setTimeout(resolve, ms);
+    animFrameIds.push(id);
+  });
+}
+
+function cancelAllAnimations() {
+  for (const id of animFrameIds) {
+    clearTimeout(id);
+    try { cancelAnimationFrame(id); } catch(e) {}
+  }
+  animFrameIds = [];
+
+  for (const id of overlayTimeoutIds) {
+    clearTimeout(id);
+  }
+  overlayTimeoutIds = [];
+
+  overlayEl.innerHTML = '';
+  pCtx.clearRect(0, 0, 480, 480);
+}
+
+// ============================================================
+// RESTART
+// ============================================================
+restartBtn.addEventListener('click', () => {
+  cancelAllAnimations();
+  boardContainer.classList.remove('blocked', 'flash-red');
+  isAnimating = false;
+  isGameOver = false;
+  selected = null;
+  init();
+});
+
+// ============================================================
+// START
+// ============================================================
+init();
+</script>
+</body>
+</html>
