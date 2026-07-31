@@ -25,7 +25,7 @@
 - State machine with 4 modes: `TITLE`, `GAME`, `PAUSE`, `GAMEOVER`
 - Text-only placeholder screens:
   - **Title:** "Title Screen" + "Press Enter / ESC"
-  - **Game:** "Game Mode (Level 1)" + "Press ESC to pause"
+  - **Game:** "Game Mode (Level 1)"
   - **Pause:** "PAUSED" + "ESC to resume, X to exit"
   - **Game Over:** "GAME OVER" + "R to restart, ESC to exit"
 - Mode transitions:
@@ -35,7 +35,8 @@
   - `X` → Title (from Pause)
   - `R` → Game (from Game Over)
   - `ESC` → Title (from Game Over)
-- `--test` flag: show title screen for 100 ms, then exit code 0
+  - `ESC` → exit code 0 (from Title)
+- `--test` command line flag: if set show title screen for 100 ms, then exit code 0 (confirms the game starts)
 
 ---
 
@@ -50,6 +51,7 @@
 - Screen wrapping on all edges
 - Ship centered at window center on level start / restart
 - "Begin level N" centered text that fades out over ~2 seconds
+- The player's ship is neither displayed nor controllable during "Begin level N" fadeout
 
 ---
 
@@ -57,17 +59,16 @@
 
 **Goal:** Asteroids appear, tumble, and wrap — no collision yet.
 
-- Asteroid class: irregular polygon shape (not circles), white outline, random brown/beige fill
+- Asteroid class: irregular polygon shape, white outline, random brown-ish or beige-ish fill
 - Tumbling: rotation scales inversely with size (large = 1°/frame, small = 10°/frame)
   - "large" = 40 pixel radius, "small" = 15 pixel radius, this is the max size range for asteroids
   - interpolate a rotation speed between these two sizes using the numbers above
 - Random initial direction, speed 1.5–2.5 px/frame
-- Spawning: random positions, never within 200 px of ship; fallback to screen corners
+- Spawning: random positions, never within 200 px of ship; fallback to screen corners if necessary
 - Level 1: 5 large asteroids (radius 40 px)
 - Screen wrapping on all edges
-- Respond to window resize events to ensure all asteroids screen wrap instantly if they are no longer visible
+- Respond to window resize events to ensure all asteroids screen wrap instantly if they are no longer visible after resize
 - No asteroid-asteroid collision (they pass through each other)
-- "Begin level N" fade-out text (from Stage 2)
 
 ---
 
@@ -79,14 +80,15 @@
 - Asteroid hit logic:
   - Splits into 2–3 smaller asteroids (radius = parent / 1.5)
   - Split asteroids: speed × 1.2, random direction
-  - Asteroids < 20 px radius: destroyed (no further split)
+  - Asteroids < 20 px radius are destroyed on hit (no further split)
 - Implement asteroid "hit" count persisted as levels advance.
   - Only asteroid destruction events count as a "hit" (splits don't count)
   - Restarting the game resets the hit count to 0
 - All asteroids destroyed → increment level, spawn new asteroids
   - Each level: +1–2 starting asteroids, +0.3 px/frame base speed
-- Game Over screen: "GAME OVER" in red, "Press R to restart, ESC to exit"
+- Game Over screen: "GAME OVER" in red, smaller white text underneath reads "Press R to restart, ESC to exit"
 - Restart resets to level 1
+- ESC returns to title screen
 
 ---
 
@@ -97,7 +99,7 @@
 - Cannon with 3 power levels
 - **Level 1:** Single yellow projectile from ship tip, initial velocity = ship velocity + 6 px/frame forward, max 3 in flight, 1000 px travel distance, screen wrapping
 - **Level 2:** 3 projectiles in 20° arc, orange, max 9 in flight
-- **Level 3:** 4×4 px white projectiles, 8 px/frame speed, unlimited in flight
+- **Level 3:** 4×4 px white projectiles, 8 px/frame speed, unlimited number in flight
 - Space bar: one press = one shot (holding has no effect)
 - Projectile-asteroid collision → asteroid split/destruction
 - Projectile-ship collision → Game Over with "Friendly fire!" message
@@ -112,9 +114,9 @@
 **Goal:** Secondary weapon with charge mechanics.
 
 - Laser beam: straight line from ship tip in facing direction
-- **Level 1:** 1 px wide, 100 px long, light blue, charge 100, drain 3/frame, recharge 1/frame, min 20 to activate
-- **Level 2:** 2 px wide, 125 px long, drain 2/frame, recharge 2/frame
-- **Level 3:** 3 px wide, white, any hit = instant destroy (bypasses split)
+- **Level 1:** 1 px wide, 100 px long, light blue, charge 100, drain 3/frame, recharge 1/frame, min 20 charge to activate
+- **Level 2:** 2 px wide, 125 px long, light blue, drain 2/frame, recharge 2/frame
+- **Level 3:** 3 px wide, 150 px long, white, any hit = instant destroy (bypasses split)
 - Beam follows ship movement/rotation while active
 - Screen wrapping awareness:
   - this may involve rendering the laser beam in multiple disconnected segments if it crosses a screen edge
@@ -141,11 +143,11 @@
 
 **Goal:** Powerup spawning, collection, and weapon management.
 
-- Powerup icon: 20 px radius circle, labeled "C" (yellow), "L" (light blue), or "S" (red), white letter
+- Powerup icon: 20 px radius circle, labeled "C" (yellow fill), "L" (light blue fill), or "S" (red fill), white letter
 - Spawns every 30 seconds of gameplay at random position (not on ship or asteroids)
 - Icon is indestructible for the first 60 frames of its existence (can be collected by player's ship but is immune to all other collisions)
 - Drifts at 2 px/frame in random direction
-- Only one powerup on screen at a time
+- Multiple powerups can appear onscreen at a time
 - Asteroid collision with powerup → powerup destroyed, asteroid is split or destroyed
   following the usual asteroid hit rules. Update the asteroid "hit" count if the asteroid is destroyed.
 - Ship collision with powerup:
@@ -161,14 +163,33 @@
 
 ---
 
-## Stage 9: Full HUD
+## Stage 9: Enemy UFOs
+
+Every 3 minutes of gameplay, spawn an enemy UFO:
+
+- horizontal oval shape, 40 px wide, 15 px tall
+- white outline, light red fill
+- random starting location, not on top of player's ship
+- random direction, 2px/s speed, straight line course
+- changes direction by up to 30 degrees randomly left/right every 300 frames
+- no collision detection with asteroids (passes through them)
+- can "steal" powerups by destroying them on contact
+- every 120 frames, fire a level 1 cannon projectile in the direction of player's ship
+- UFO cannon projectiles have the same collision rules as player's, but half the travel distance (expire after 500 px)
+- UFO projectile collides with player's ship: instant game over with "Hostile fire!" message
+  - exception: UFO projectiles cannot penetrate the ramming shield
+- Player weapon of any type collides with UFO: UFO is destroyed
+
+---
+
+## Stage 10: Full HUD
 
 **Goal:** Complete in-game heads-up display.
 
-- Rounded cyan border, 4 px width, 60% opacity background
+- Rounded cyan border, dark gray fill, 4 px width, 60% opacity
 - Upper-right corner placement
 - Displays:
-  - "Level: N" (white)
+  - "Level: N" (white text)
   - "Hits: N" (white — destructions only, not splits)
   - "Weapon: [name]" (color-coded: Cannon = yellow, Laser = light blue, Shield = red)
   - "Power: N" (color-coded, matches weapon)
@@ -177,15 +198,19 @@
 
 ---
 
-## Stage 10: Title Screen Polish + Cosmetic Effects (Final Stage)
+## Stage 11: Title Screen Polish + Cosmetic Effects (Final Stage)
 
 **Goal:** All visual polish, animated title screen, thruster effects.
 
 ### Title Screen
-- "SuperAsteroids" in large centered text (upper half of screen)
+- "SuperAsteroids" in large centered white text (upper half of screen)
 - Subtle starfield background (random grayscale dots, varying brightness, "twinkle" effect)
-- 2–5 asteroids tumbling gently with screen wrap
-- "Press Enter to start" text below title
+- 4–7 asteroids tumbling gently with screen wrap
+- "Press Enter to start" in smaller white text below title
+- keyboard instructions in small light gray text centered in bottom third of screen:
+  - "Left/Right: Rotate  |  Up: Thrust"
+  - "Space: activate weapon"
+  - "ESC: pause  |  F11: full screen"
 
 ### Thruster Exhaust
 - Yellow circles (3–8 px radius) ejected from ship rear when thrusting
@@ -198,8 +223,9 @@
 ### Particle Explosions
 - **Split:** colorful (yellow, red, orange), count = radius × 3
 - **Destruction:** monochromatic gray, count = radius × 3
-- Velocity 5–15 px/frame, random direction
-- Alpha decay 3–10%/frame, random per particle
+- **UFO destruction:** 100 light red particles
+- Particle velocity 5–15 px/frame, random direction
+- Particle alpha decay 3–10%/frame, random per particle
 
 ### Subtle starfield background
 - applies to all game modes
@@ -210,6 +236,8 @@
   - when max or min brightness is achieved, reverse the direction and continue
   - star brightness changes at 0.1% per frame
   - max brightness = pure white, min brightness = black
+- starfield must respond to resize events! Making the window larger must fill the new area with random stars
+- toggling fullscreen mode must also handle filling the new screen real estate with stars
 
 ---
 
@@ -219,9 +247,7 @@
 
 - Load `sfx/*.wav` on startup and cache each sound effect in memory
 - `sfx/README.md` contains a table indicating which effects map to which in-game events
-- Pressing `F2` in Game Mode toggles sound on/off. Defaults to on, toggle is only available in Game Mode.
-- Audio toggle state persists across levels and also when starting a new game.
-- Thruster sound effect should loop for as long as the thruster key is held. All other effects simply play once per associated game event.
+- Add a `--quiet` command line option. If set, disable all sound.
 
 ---
 
