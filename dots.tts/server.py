@@ -22,7 +22,6 @@ import json
 import math
 import random
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -373,88 +372,6 @@ def synthesize(req: SynthesisRequest) -> SynthesisResponse:
     finally:
         # Clean up the temporary prompt audio file.
         _cleanup_temp(prompt_audio_path)
-
-
-@app.post(
-    "/parse",
-    response_model=ParseResponse,
-    tags=["STT"],
-    summary="Transcribe audio using Whisper",
-)
-def parse(req: ParseRequest) -> ParseResponse:
-    """
-    Transcribe audio using the locally-installed ``whisper`` binary.
-
-    Parameters
-    ----------
-    req : ParseRequest
-        - **audio_base64**: Base64-encoded audio file to transcribe.
-
-    Returns
-    -------
-    ParseResponse
-        - **text**: Transcribed text.
-        - **language**: Detected two-letter language code (defaults to ``en``).
-
-    Raises
-    ------
-    503 Service Unavailable
-        If the ``whisper`` binary is not installed on the server.
-    500 Internal Server Error
-        If ``whisper`` exits with a non-zero return code or transcription fails.
-    """
-    if shutil.which("whisper") is None:
-        raise HTTPException(
-            status_code=503,
-            detail="STT is not available on this server (whisper not installed).",
-        )
-
-    try:
-        raw_audio = base64.b64decode(req.audio_base64)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid base64 audio: {exc}")
-
-    tmpdir = tempfile.mkdtemp()
-    input_path = str(Path(tmpdir) / "input.wav")
-    try:
-        Path(input_path).write_bytes(raw_audio)
-        logger.info("Running whisper on temporary file: {}", input_path)
-
-        result = subprocess.run(
-            [
-                "whisper",
-                "--model", "small",
-                "--output_format", "json",
-                "--output_dir", tmpdir,
-                input_path,
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        if result.returncode != 0:
-            logger.error("whisper failed (rc={}): {}", result.returncode, result.stderr)
-            raise HTTPException(
-                status_code=500,
-                detail=f"STT is not available on this server: whisper exited with code {result.returncode}.",
-            )
-
-        output_json_path = Path(tmpdir) / "input.json"
-        with output_json_path.open() as f:
-            whisper_output = json.load(f)
-
-        text = whisper_output.get("text", "")
-        language = whisper_output.get("language", "en")
-
-        return ParseResponse(text=text, language=language)
-
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.error("Parse failed: {}", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(exc))
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
