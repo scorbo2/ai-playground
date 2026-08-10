@@ -64,7 +64,7 @@ Due to screen wrap, it is possible for a player projectile to impact the player'
 
 ## Thrusters
 
-When the player is thrusting, small yellow circles should be ejected from the rear of the ship. These circles should have a random radius between 3 and 8 pixels. They fade from yellow to orange, and then to red, and their alpha is adjusted so that they become fully transparent as they travel from the ship. This simulates thruster exhaust. These circles do not cause asteroid impact events and have no effect on powerup icons. It is a purely cosmetic visual effect. Initial velocity is random between 6 and 10 pixels per frame. Alpha adjustment is 5% per frame, starting from fully opaque and ending with fully invisible.
+When the player is thrusting, small yellow circles should be ejected from the rear of the ship. These circles should have a random radius between 3 and 8 pixels. They fade from yellow to orange, and then to red, and their alpha is adjusted so that they become fully transparent as they travel from the ship. This simulates thruster exhaust. These circles do not have collision detection with any other game object. It is a purely cosmetic visual effect. Initial velocity is random between 6 and 10 pixels per frame. Alpha adjustment is 5% per frame, starting from fully opaque and ending with fully invisible.
 
 ### Misc
 
