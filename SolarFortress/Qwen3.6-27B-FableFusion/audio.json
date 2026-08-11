@@ -1,0 +1,41 @@
+{
+  "audioMapping": [
+    {
+      "gameEvent": "newGame",
+      "audio": "sfx/newGame.wav"
+    },
+    {
+      "gameEvent": "playerShoot",
+      "audio": "sfx/playerShoot.wav"
+    },
+    {
+      "gameEvent": "homingSpawn",
+      "audio": "sfx/homingSpawn.wav"
+    },
+    {
+      "gameEvent": "homingDown",
+      "audio": "sfx/homingDown.wav"
+    },
+    {
+      "gameEvent": "enemyShoot",
+      "audio": "sfx/enemyShoot.wav"
+    },
+    {
+      "gameEvent": "playerDown",
+      "audio": "sfx/playerDown.wav"
+    },
+    {
+      "gameEvent": "shieldDown",
+      "audio": "sfx/shieldDown.wav"
+    },
+    {
+      "gameEvent": "shieldUp",
+      "audio": "sfx/shieldUp.wav"
+    },
+    {
+      "gameEvent": "fortressDown",
+      "audio": "sfx/fortressDown.wav"
+    }
+  ]
+}
+
