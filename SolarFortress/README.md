@@ -19,7 +19,7 @@ See the result in the [LLM Battle 5](https://www.youtube.com/watch?v=zzOh6e3dm7w
 - Qwen 3.6 35B A3B - failed!
 - Qwen 3.6 27B - succeeded!
 - Qwen 3.6 27B "Fable Fusion" - failed!
-- Muse Glimmer - check back tomorrow
+- Muse Glimmer - succeeded!
 
 See the results in each contender's dedicated subdirectory!
 
