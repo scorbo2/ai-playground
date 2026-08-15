@@ -538,7 +538,7 @@ Pressing `F2` at any time toggles sound on/off. This setting is global and is un
 For example: toggling sound off in Game Mode will keep it off even when returning to the title screen and starting
 a new game. Sound must manually be toggled back on via `F2`.
 
-Sound defaults to on.
+Sound defaults to on unless the `--nosound` command line argument is passed.
 
 ## "Debug" option (for cheating)
 
@@ -582,9 +582,10 @@ If `--debug` is not specified, these keys do nothing.
   make testing easier. Implement weapon collision detection for the laser and the shield.
 - Stage 6: implement enemy UFOs and UFO projectiles. Update collision detection code accordingly.
 - Stage 7: implement audio using the contents of the `sfx` subdirectory. Implement the `F2` toggle.
-  Add a `--nosound` command line option that overrides the default audio state on startup.
+  Add the `--nosound` command line option that overrides the default audio state on startup.
 - Stage 8: cosmetic effects, such as the starfield background, thruster flame effect, and
-  particle explosions can be implemented now.
+  particle explosions can be implemented now. There should be no changes needed to collision
+  detection in this stage.
 
 ### Per-stage verification
 
