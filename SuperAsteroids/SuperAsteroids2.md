@@ -504,6 +504,15 @@ There is no scaling required! All game objects remain at their current size when
 
 Resizing the window below 400px width OR below 300px height should be rejected - enforce minimum window size of 400x300.
 
+**Implementation warning (window resizing):** A `VIDEORESIZE` event means pygame has
+*already* resized the drawing surface to the new window size. For any resize that stays
+at or above the 400x300 minimum, the handler must do nothing — do NOT call
+`pygame.display.set_mode()` again. Re-applying `set_mode()` in response to a valid resize
+fights the window manager's in-progress resize gesture and makes the window snap back to
+its previous size, so the user can no longer resize the window at all. Call `set_mode()`
+only in the single case where the requested size falls below the minimum, to force the
+window back up to 400x300.
+
 The HUD is always in the upper right of the screen. Adjust its position as needed on resize events. Its size does not change.
 If the new window size is too small to render the HUD, the HUD should be hidden.
 
