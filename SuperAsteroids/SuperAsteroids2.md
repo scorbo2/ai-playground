@@ -52,8 +52,11 @@ Game mode can be accessed from the Title screen by pressing `Enter`, or from Gam
 Game mode begins on level 1. 
 
 At the start of each level, the text "BEGIN LEVEL N" should appear in the center of the screen (where N is
-the current 1-based level number). Hold for 90 frames, then fade out over 30 frames.
-The player's ship then appears in the center of the screen, and the game begins.
+the current 1-based level number). Hold for 90 frames, then fade out over 30 frames. During this text display
+and fade out, the asteroids that were spawned for this level should be displayed, but not yet animated.
+The player craft is not yet displayed, and no craft movement or weapons controls are operational.
+After the text fade out is complete, the player's ship appears in the center of the screen, the asteroids
+begin to move, player controls are enabled, and the game begins.
 
 On each level advancement, all explosion particles, powerup icons, thruster exhaust circles, projectiles, 
 and enemy UFOs are removed from play. The player's craft is returned to the center of the screen facing up,
@@ -206,12 +209,12 @@ The game should keep track of the following stats and display them in the HUD. S
 level to level. All stats reset to 0 at the start of level 1.
 
 - "Shots fired": the total cumulative count of successful weapon activations of any type.
-- Count of asteroids destroyed (label "Hits:"). This does NOT include asteroid splits, only asteroid destruction 
-  events. Only asteroids destroyed by player weapons count towards this stat. Font color: white.
-- "Hit rate": this is count of asteroid destruction events / count of successful weapon activations * 100.
-  Note that asteroid splits do NOT count towards the hit rate. Only asteroids destroyed by player
-  weapons count towards this stat. Round to one decimal place. If the player has not yet fired any
-  weapon or caused any asteroid destructions yet, display "0.0%". Font color: white.
+- "Hits": Count of asteroids split or destroyed by any player weapon. Asteroids that are split or destroyed
+  by any other means (powerup collision, UFO projectile, and so on) do not count towrds this stat.
+- "Hit rate": this is count of hits / count of successful weapon activations * 100.
+  Only asteroids that are split or destroyed by player weapons count towards this stat. 
+  Round to one decimal place. If the player has not yet fired any
+  weapon or caused any asteroid splits or destructions yet, display "0.0%". Font color: white.
 - "Nickname": the player's "nickname" is derived from their hit rate. Use the following guide:
   - 0%: "New recruit" (this is the default starting nickname when beginning level 1)
   - between 0% and 10%: choose randomly from "Blind woodsman", "One-eyed Pete", "Unlucky Larry",
@@ -253,9 +256,9 @@ The icon's color and label are randomly selected from the following list:
 
 The icon drifts at a speed of 2 pixels per frame in a randomly chosen direction. 
 If the icon impacts an asteroid of any size outside of its grace period, the powerup icon is destroyed and removed from play.
-The asteroid that impacted it will be split or destroyed according to the usual asteroid impact rules. This does not
-update the player's score. If the icon impacts an enemy UFO, the icon is removed from play, even if this occurs
-during the grace period. The enemy UFO is unaffected by this collision.
+The asteroid that impacted it will be split or destroyed according to the usual asteroid impact rules. 
+If the icon impacts an enemy UFO, the icon is removed from play, even if this occurs
+during the icon's grace period. The enemy UFO is unaffected by this collision.
 
 If the player's ship impacts the icon (even during the icon's grace period), the icon is removed from the screen,
 and the player's current weapon is adjusted according to the following rules:
