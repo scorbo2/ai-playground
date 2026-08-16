@@ -39,6 +39,12 @@ class SuperAsteroidsApp:
         # The GameState frozen by to_pause(), restored by resume().
         self._paused_state: Optional[GameModeState] = None
 
+        # Global sound state (spec: Sound - one F2 toggle for the whole
+        # app, unaffected by mode). Stage 7 loads the sfx, adds F2, and the
+        # --nosound startup override; until then it simply stays "On" and
+        # the HUD's "Sound:" line reports this value.
+        self._sound_on = True
+
         # F11 state: _is_fullscreen mirrors the real window state, and the
         # windowed geometry is saved on enter so we can restore it exactly on
         # exit (see _enter_fullscreen / _exit_fullscreen).
@@ -57,6 +63,10 @@ class SuperAsteroidsApp:
     @property
     def state(self) -> GameModeState:
         return self._state
+
+    @property
+    def sound_on(self) -> bool:
+        return self._sound_on
 
     def to_title(self) -> None:
         self._paused_state = None

@@ -97,3 +97,33 @@ PLAYER_ACCELERATION = 0.3              # px/frame^2 in facing dir while Up held
 PLAYER_MAX_SPEED = 8.0                 # px/frame, clamped after thrust
 PLAYER_FRICTION = 0.98                 # velocity multiplier/frame when not thrusting
 PLAYER_STALL_SPEED = 0.05              # px/frame; below this, speed snaps to 0
+
+# --------------------------------------------------------------------- cannon
+# Level 1 cannon (Stage 4); power levels 2-3 land with powerups in Stage 5.
+CANNON_PROJECTILE_SIZE = 2             # px: projectiles are 2x2 square blocks
+CANNON_PROJECTILE_SPEED = 6            # px/frame added to craft velocity
+CANNON_PROJECTILE_DISTANCE = 1000      # px cumulative travel before expiring
+                                       # (wraps are transparent to this counter)
+CANNON_MAX_PROJECTILES_L1 = 3          # in-flight cap at power level 1
+CANNON_SELF_GRACE = 30                 # frames a projectile cannot hit its own craft
+FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE!"
+
+# -------------------------------------------------------------- level intro
+# "BEGIN LEVEL N" sequence at the start of every level (spec: Game Mode):
+# full opacity for the hold, then a linear fade out.
+LEVEL_INTRO_HOLD = 90                  # frames at full opacity
+LEVEL_INTRO_FADE = 30                  # frames to fade to invisible
+
+# ------------------------------------------------------------------------ HUD
+# Upper-right HUD (spec: "Heads-up display"). Everything is drawn at a single
+# ~60% opacity (alpha 153) on a transparent surface.
+HUD_WIDTH = 200
+HUD_HEIGHT = 200
+HUD_MARGIN = 10
+HUD_CORNER_RADIUS = 12
+HUD_BORDER_WIDTH = 4
+HUD_ALPHA = 153                        # ~60% for border AND contents
+HUD_FONT_SIZE = 18                     # "scale to fit": lines shrink to fit
+HUD_LINE_SPACING = 18
+HUD_TEXT_PADDING = 8
+HUD_MIN_FONT_SIZE = 10                 # floor for the fit-to-width shrink
