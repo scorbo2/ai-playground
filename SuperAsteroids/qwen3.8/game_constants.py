@@ -79,3 +79,21 @@ ASTEROID_OUTLINE_WIDTH = 2
 # ------------------------------------------------------------- title screen
 # Cosmetic asteroids: same movement, tumbling, and wrapping as game asteroids.
 TITLE_ASTEROID_COUNT_RANGE = (3, 6)
+
+# ---------------------------------------------------------------- player craft
+# The craft is an elongated triangle, 20 px wide (base) by 30 px tall
+# (apex to base), drawn with a white outline and light gray fill.
+PLAYER_SHAPE_WIDTH = 20
+PLAYER_SHAPE_HEIGHT = 30
+PLAYER_OUTLINE_WIDTH = 2
+# Bounding circle for ALL collision checks, and the wrap margin (spec:
+# "Collision detection" -> "Player craft: a simple 20px radius circle").
+PLAYER_RADIUS = 20
+# Screen-angle convention (degrees): 0 = +X axis, positive toward +Y
+# (screen coordinates). "Up" is therefore -90, the craft's start heading.
+PLAYER_START_ANGLE = -90.0
+PLAYER_ROTATION_SPEED = 5.0            # degrees/frame while left/right held
+PLAYER_ACCELERATION = 0.3              # px/frame^2 in facing dir while Up held
+PLAYER_MAX_SPEED = 8.0                 # px/frame, clamped after thrust
+PLAYER_FRICTION = 0.98                 # velocity multiplier/frame when not thrusting
+PLAYER_STALL_SPEED = 0.05              # px/frame; below this, speed snaps to 0

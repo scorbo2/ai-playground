@@ -23,6 +23,12 @@ class GameModeState(ABC):
         """Process pygame events for this mode. May trigger a mode change
         or terminate the application."""
 
+    def on_pause(self) -> None:
+        """Hook the app calls the moment this state is frozen by
+        ``to_pause()`` - whichever path froze it (ESC key or programmatic).
+        States must leave themselves safely restorable here, e.g. by
+        dropping transient input state that could resume stale."""
+
     def update(self) -> None:
         """Per-frame simulation step. The default is a no-op; states that
         own game objects (asteroids, later the ship and weapons) override

@@ -5,9 +5,12 @@ from entities.asteroid import (
     spawn_level_asteroids,
     spawn_title_screen_asteroids,
 )
+from entities.player import PlayerCraft, player_hits_asteroid
 
 __all__ = [
     "Asteroid",
+    "PlayerCraft",
+    "player_hits_asteroid",
     "spawn_level_asteroids",
     "spawn_title_screen_asteroids",
 ]

@@ -38,6 +38,7 @@ from game_constants import (
     TITLE_ASTEROID_COUNT_RANGE,
     WHITE,
 )
+from position_utils import wrap_around
 
 
 def rotation_speed_for_radius(radius: float) -> float:
@@ -87,15 +88,7 @@ class Asteroid:
         self._wrap(width, height)
 
     def _wrap(self, width: int, height: int) -> None:
-        """Re-enter from the opposite edge once fully off-screen.
-
-        Modulo wrap (rather than a single if/else) stays correct if a window
-        resize - or returning from full screen - leaves the center far
-        outside the new bounds; the spec requires forced re-wrap right after
-        a resize, and this runs on the very next frame.
-        """
-        self.x = (self.x + self.radius) % (width + 2 * self.radius) - self.radius
-        self.y = (self.y + self.radius) % (height + 2 * self.radius) - self.radius
+        self.x, self.y = wrap_around(self.x, self.y, self.radius, width, height)
 
     # ------------------------------------------------------------- game rules
 

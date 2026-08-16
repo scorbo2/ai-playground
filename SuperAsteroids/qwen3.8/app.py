@@ -71,7 +71,10 @@ class SuperAsteroidsApp:
     def to_pause(self) -> None:
         # Freeze: the running GameState is saved and restored AS-IS on
         # resume (spec: "the game in progress is frozen in place" - a
-        # resume must NOT rebuild the level).
+        # resume must NOT rebuild the level). The outgoing state gets a
+        # say in the freeze first (on_pause), so transient state like
+        # held keys is dropped on EVERY pause path, not just the ESC one.
+        self._state.on_pause()
         self._paused_state = self._state
         self._state = PauseState(self)
 
@@ -82,7 +85,8 @@ class SuperAsteroidsApp:
             self._paused_state = None
 
     def to_game_over(self, special_message: str | None = None) -> None:
-        # Not reachable in Stage 2; later stages call this on player death.
+        # Reached from Game Mode: the craft flying into an asteroid (Stage 3),
+        # weapon deaths later (Stages 4-6, with their green special messages).
         self._state = GameOverState(self, special_message)
 
     def quit(self) -> None:
