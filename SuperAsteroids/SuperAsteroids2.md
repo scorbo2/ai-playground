@@ -97,13 +97,13 @@ There is NO collision detection between asteroids - they simply pass through eac
 
 Screen wrapping is applied at all screen edges.
 
-Asteroids should have a white outline, and each should have a randomly-chosen fill color in the brown or beige range.
+Asteroids should have a white outline, and each should have a randomly-chosen grayscale fill 
+randomly selected between 72 (minimum) and 152 (maximum).
 
 When an asteroid is hit by any player weapon, it splits into 2-3 (randomly selected) smaller asteroids.
 The radius of the smaller asteroids is the parent's radius / 1.5. Their speed is the parent asteroid's speed multiplied by 1.2,
 and their direction is completely random. If an asteroid with a radius smaller than 20 pixels is impacted, 
-it is destroyed - do not split further. Child asteroids do not need to inherit their parent's rotation
-direction or color - these can be chosen randomly per child by the same rules as for parent asteroids.
+it is destroyed - do not split further. Child asteroids inherit their parent's rotation direction and color.
 
 Asteroid splits are accompanied by a colorful particle explosion. The particle color is randomly selected
 for each particle from bright yellow, red, and orange. 
@@ -139,7 +139,7 @@ Suggested asteroid "irregular shape" generation:
   - `vertex_radius = asteroid_radius * radius_factor`
   - `x = cos(angle) * vertex_radius`
   - `y = sin(angle) * vertex_radius`
-- draw polygon with white outline and random brown/beige fill
+- draw polygon with white outline and random grayscale fill (between 72 and 152)
 - rotate the whole asteroid over time
 
 ### Pause Mode
@@ -194,7 +194,7 @@ The HUD is ONLY displayed in Game Mode. In Pause Mode, Game Over Mode, and Title
 
 HUD characteristics:
 
-- size: 250px wide, 300px tall
+- size: 200px wide, 250px tall
 - position: upper right, 10px margin from screen edge
 - corner radius: 12
 - border color: cyan
@@ -636,24 +636,14 @@ LIGHT_RED = (255, 127, 127)
 LIGHT_GRAY = (200, 200, 200)
 DARK_GRAY = (64, 64, 64)
 GRAY = (128, 128, 128)
+ASTEROID_MIN_FILL = 72   # 72,72,72 = dark gray
+ASTEROID_MAX_FILL = 152  # 152,152,152 = medium gray
 # And so on...
 ```
 
-Brown and beige asteroid colors can be random ranges:
+Asteroid colors can be a random range per asteroid:
 
 ```
-brown = (
-    random.randint(130, 180),
-    random.randint(70, 120),
-    random.randint(30, 80)
-)
-
-beige = (
-    random.randint(220, 250),
-    random.randint(200, 240),
-    random.randint(150, 200)
-)
+fillColor = random.randint(ASTEROID_MIN_FILL, ASTEROID_MAX_FILL)
 ```
-
-But these should be calculated per-asteroid, not stored in constants.
 
