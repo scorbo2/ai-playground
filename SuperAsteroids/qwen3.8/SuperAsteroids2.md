@@ -557,11 +557,13 @@ Sound defaults to on unless the `--nosound` command line argument is passed.
 If the `--debug` argument is specified on the command line, then additional hotkeys are available to
 spawn an immediate powerup at a random screen location (never within 200px of the player craft):
 
-- press 'C' to spawn a Cannon powerup
-- press 'L' to spawn a Laser powerup
-- press 'S' to spawn a shield powerup
+- press 'C' to spawn a Cannon powerup (no cap)
+- press 'L' to spawn a Laser powerup (no cap)
+- press 'S' to spawn a shield powerup (no cap)
+- press 'U' to spawn an enemy UFO (if not already at UFO cap)
 
-There are no limits to the number of powerup icons you can spawn at any time. 
+There are no limits to the number of powerup icons you can spawn at any time. Only 3 enemy UFOs can
+be active at any one time.
 
 If `--debug` is not specified, these keys do nothing.
 
