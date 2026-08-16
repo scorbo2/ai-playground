@@ -27,7 +27,7 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--debug",
         action="store_true",
         help="enable debug hotkeys in Game Mode: C/L/S spawn a Cannon/Laser/"
-              "Shield powerup, U spawns an enemy UFO (Stage 6)",
+               "Shield powerup, U spawns an enemy UFO",
     )
     return parser.parse_args(argv)
 

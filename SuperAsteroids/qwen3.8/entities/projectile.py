@@ -5,8 +5,8 @@ Per the spec (Weapons -> Cannon):
     the craft's facing direction (set by the weapon that spawns it);
   - travels CANNON_PROJECTILE_DISTANCE pixels CUMULATIVELY - screen wraps
     are transparent to the counter, exactly N px of flight always count
-    (the budget is an instance field so Stage 6's shorter-range UFO
-    projectiles can reuse this class);
+    (the budget is an instance field, which is how the shorter-range 500px
+    UFO projectiles reuse this class);
   - has a CANNON_SELF_GRACE frame window during which it can trigger every
     impact EXCEPT the one with its own craft (self-immunity only, spec);
   - impacts use the projectile's EXACT square shape, not a bounding circle.
@@ -29,7 +29,8 @@ class CannonProjectile:
 
     def __init__(self, x: float, y: float, vx: float, vy: float,
                  size: int = CANNON_PROJECTILE_SIZE, color=YELLOW,
-                 distance_limit: float = CANNON_PROJECTILE_DISTANCE):
+                 distance_limit: float = CANNON_PROJECTILE_DISTANCE,
+                 grace_frames: int = CANNON_SELF_GRACE):
         self.x = x
         self.y = y
         self.vx = vx
@@ -38,7 +39,10 @@ class CannonProjectile:
         self.color = color
         self.distance_traveled = 0.0
         self.distance_limit = distance_limit
-        self.grace_frames = CANNON_SELF_GRACE
+        # Enemy (UFO) shots pass 0 here: they pass through enemy crew, so
+        # their only kill threat is the player craft and it is live from
+        # frame one - no self-kill window is needed.
+        self.grace_frames = grace_frames
 
     @property
     def half_size(self) -> float:

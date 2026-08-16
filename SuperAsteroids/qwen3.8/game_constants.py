@@ -168,9 +168,28 @@ POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
 # level; level 5+ clamps to the last entry (1%).
 POWERUP_DROP_CHANCES = (0.08, 0.06, 0.04, 0.02, 0.01)
 
+# --------------------------------------------------------------------- UFO
+# Per the spec ("Enemy UFOs"): a hostile that drifts in a straight line,
+# deflects periodically, and fires at the craft. Every timer here is counted
+# in frames of ACTIVE play, so pause (and level intros) suspend it for free.
+UFO_OVAL_WIDTH = 40                    # px, the drawn ellipse is 40 wide...
+UFO_OVAL_HEIGHT = 15                   # ...by 15 tall
+UFO_OUTLINE_WIDTH = 2                  # px, matches the other outlines
+UFO_RADIUS = 30                        # bounding circle (spec: Collision)
+UFO_SPEED = 2                          # px/frame, straight-line drift
+UFO_SPAWN_ATTEMPTS = 50                # random tries for a safe spawn spot
+UFO_INTERVAL = 3 * 60 * 60             # 10800 frames (3 min of active play)
+UFO_MAX_ACTIVE = 3                     # cap; an expired timer at cap just resets
+UFO_DIRECTION_CHANGE_INTERVAL = 300    # frames between random deflections
+UFO_TURN_MAX_DEGREES = 30              # max deflection, random left/right
+UFO_FIRE_INTERVAL = 120                # frames between hostile shots
+UFO_PROJECTILE_DISTANCE = 500          # half of the player's level 1 range
+HOSTILE_FIRE_MESSAGE = "HOSTILE FIRE!"
+
 # -------------------------------------------------------------------- debug
 # --debug hotkeys: C/L/S spawn a powerup of that type (no cap), U spawns a
-# UFO (Stage 6). Spawned powerup positions avoid the craft's safe distance.
+# UFO if under the active cap. Spawned powerup positions avoid the craft's
+# safe distance.
 DEBUG_SPAWN_ATTEMPTS = 50
 
 # -------------------------------------------------------------- level intro

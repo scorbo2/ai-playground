@@ -1,8 +1,8 @@
 """Position helpers shared by every wrapping entity.
 
-Asteroids (Stage 2) and the player craft (Stage 3) wrap the screen today;
-projectiles, thruster exhaust, UFOs, and powerups (later stages) will join
-them, so the modulo math lives in exactly one place.
+Asteroids, the player craft, cannon projectiles, powerups, and UFOs all
+wrap the screen today; thruster exhaust (Stage 8) will join them, so the
+modulo math lives in exactly one place.
 """
 
 import math

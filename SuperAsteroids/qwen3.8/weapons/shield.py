@@ -5,8 +5,10 @@ bar, it destroys/splits anything it touches and "bounces" the craft away
 from the impact point at speed = asteroid radius / (level divisor), always
 clamped to max craft speed. Charge rules match the laser's (100 units,
 can't activate below 20, drain continues while held after a hit/depletion).
-At power 3 shield impacts destroy asteroids outright. UFO interaction
-arrives with Stage 6.
+At power 3 shield impacts destroy asteroids outright, and UFOs touch the
+ring at ANY power level: destroyed instantly, with the same bounce rules
+using the UFO's 30 px bounding radius in place of the rock's (the
+collision itself is resolved by the game state, which owns the bounce).
 """
 
 import pygame

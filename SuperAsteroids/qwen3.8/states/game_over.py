@@ -1,9 +1,9 @@
 """Game Over Mode.
 
-Stage 1 notes: not reachable yet (nothing can kill the player before the
-asteroids land in Stage 3), but the full state is implemented so later
-stages only need to call ``app.to_game_over()`` with an optional green
-special message such as "FRIENDLY FIRE!" or "HOSTILE FIRE!".
+Reached by flying the craft into an asteroid, colliding with an enemy UFO,
+or being hit by one's own (friendly fire) or an enemy (hostile fire)
+projectile. ``special_message`` renders a green line between the heading
+and the hints (spec: Game Over Mode).
 """
 
 import pygame
