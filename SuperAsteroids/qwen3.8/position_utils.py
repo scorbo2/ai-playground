@@ -1,8 +1,9 @@
 """Position helpers shared by every wrapping entity.
 
 Asteroids, the player craft, cannon projectiles, powerups, and UFOs all
-wrap the screen today; thruster exhaust (Stage 8) will join them, so the
-modulo math lives in exactly one place.
+wrap the screen; the modulo math lives in exactly one place. (Cosmetic
+particles deliberately do NOT wrap - they die within seconds of the event
+that spawns them, so wrap support would be spend without benefit.)
 """
 
 import math

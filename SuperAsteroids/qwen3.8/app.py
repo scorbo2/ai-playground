@@ -7,7 +7,9 @@ place.
 
 Window-wide concerns (quit, F11 fullscreen toggle, resize clamping, F2
 sound toggle) are handled globally in the main loop - they apply identically
-in every mode.
+in every mode. The starfield is handled the same way: it is displayed in
+ALL modes and "never stops", so the app advances it every frame regardless
+of the current mode (spec: Starfield background).
 """
 
 import sys
@@ -16,6 +18,7 @@ from typing import Optional
 
 import pygame
 
+from effects.starfield import Starfield
 from game_constants import (
     FPS,
     FRIENDLY_FIRE_MESSAGE,
@@ -54,6 +57,11 @@ class SuperAsteroidsApp:
         self.screen = pygame.display.set_mode(INITIAL_WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption("SuperAsteroids")
         self.clock = pygame.time.Clock()
+
+        # Starfield background (spec: Starfield background): one field for
+        # the whole app, regenerated whenever the window size changes.
+        self._starfield_size = self.screen.get_size()
+        self._starfield = Starfield(*self._starfield_size)
 
         # Global sound system (spec: Sound): all effects load into memory
         # on startup; a per-file load failure is a warning, not a crash.
@@ -94,6 +102,11 @@ class SuperAsteroidsApp:
         # The HUD's "Sound:" line reads this; the manager is the source of
         # truth (one global switch, unaffected by mode - spec: Sound).
         return self._sound.sound_on
+
+    @property
+    def starfield(self) -> Starfield:
+        # Every mode draws it behind its own content (spec: all modes).
+        return self._starfield
 
     def to_title(self) -> None:
         self._paused_state = None
@@ -155,6 +168,9 @@ class SuperAsteroidsApp:
                 # stop before giving the current state its view of the frame.
                 break
             self._state.handle_events(events)
+            # The starfield advances in EVERY mode - pause and game over
+            # freeze gameplay, but the sky keeps twinkling (spec).
+            self._starfield.update()
             self._state.update()
             self._state.draw(self.screen)
             pygame.display.flip()
@@ -172,7 +188,7 @@ class SuperAsteroidsApp:
                 self._running = False
                 return True
             if event.type == pygame.VIDEORESIZE:
-                self._clamp_window_size(event.size)
+                self._on_video_resize(event.size)
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 self._toggle_fullscreen()
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F2:
@@ -180,6 +196,24 @@ class SuperAsteroidsApp:
                 # persists across modes until toggled again.
                 self._sound.toggle()
         return False
+
+    def _on_video_resize(self, size: tuple) -> None:
+        self._clamp_window_size(size)
+        # Whichever path we took - pygame resized the surface itself for a
+        # valid size, or we forced it back to the minimum - the drawing
+        # area changed, and the spec explicitly allows regenerating the
+        # whole starfield to cover any newly exposed area.
+        self._rebuild_starfield()
+
+    def _rebuild_starfield(self) -> None:
+        size = self.screen.get_size()
+        if size == self._starfield_size:
+            # A no-op size change (e.g. repeated VIDEORESIZE events while
+            # the user is dragging the window edge): re-scattering the
+            # whole sky on every one of those would make it shimmer.
+            return
+        self._starfield = Starfield(*size)
+        self._starfield_size = size
 
     def _clamp_window_size(self, size: tuple) -> None:
         """Enforce the 400x300 minimum window size on resize requests.
@@ -221,6 +255,10 @@ class SuperAsteroidsApp:
             print(f"Warning: could not enter full screen: {err}",
                   file=sys.stderr)
             return
+        # The display is now the whole desktop: give the starfield the new
+        # area to work with. Fullscreen set_mode emits no VIDEORESIZE, so
+        # this call is the rebuild trigger on the way in.
+        self._rebuild_starfield()
         self._is_fullscreen = True
 
     def _exit_fullscreen(self) -> None:
@@ -231,6 +269,7 @@ class SuperAsteroidsApp:
             print(f"Warning: could not exit full screen: {err}",
                   file=sys.stderr)
             return
+        self._rebuild_starfield()
         # Re-apply the saved position explicitly: after leaving full screen
         # the window is back at its old size, but not necessarily its old
         # spot. (set_window_position needs pygame-ce >= 2.5; older builds

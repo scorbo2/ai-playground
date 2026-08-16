@@ -37,6 +37,9 @@ class GameOverState(GameModeState):
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill(BLACK)
+        # The starfield "never stops" (spec: Game Over Mode) - it keeps
+        # animating behind the frozen heading and hints.
+        self.app.starfield.draw(screen)
         width, height = screen.get_size()
 
         blit_centered(screen, render_text(self.HEADING, HEADING_FONT_SIZE, RED),

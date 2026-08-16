@@ -2,8 +2,7 @@
 
 Per the project plan (see SuperAsteroids2.md), all tunable game parameters
 live here so game mechanics can be adjusted in one place instead of
-searching across state and entity modules. Stage 1 only uses a subset of
-these; later stages will make use of the rest.
+searching across state and entity modules.
 """
 
 # ------------------------------------------------------------------ framerate
@@ -207,6 +206,40 @@ DEBUG_SPAWN_ATTEMPTS = 50
 # full opacity for the hold, then a linear fade out.
 LEVEL_INTRO_HOLD = 90                  # frames at full opacity
 LEVEL_INTRO_FADE = 30                  # frames to fade to invisible
+
+# -------------------------------------------------------------- starfield
+# Subtle background in ALL modes (spec: "Starfield background"): static
+# single-pixel grayscale stars whose brightness oscillates between
+# STAR_MAX_BRIGHTNESS and 0. Each star keeps its own phase (random starting
+# brightness and direction), which is what makes the field look "subtle"
+# instead of the whole sky pulsing in lockstep.
+STAR_COUNT_RANGE = (150, 300)         # random star count, per field
+STAR_MAX_BRIGHTNESS = 192             # the top of the RGB oscillation
+STAR_BRIGHTNESS_RATE = 0.001          # 0.1% of max brightness, per frame
+
+# -------------------------------------------------------------- particles
+# Cosmetic explosion debris (spec: Asteroids / Enemy UFOs). Particles have
+# NO collision detection and do NOT screen-wrap: at 5-15 px/frame they fade
+# to invisible well within a second or two, so wrapping would only cost
+# money for no visible benefit.
+PARTICLE_SIZE = 4                     # px, the square debris blocks (spec
+                                      # gives no size; 2 looked single-pixel,
+                                      # 4 reads as a deliberate explosion)
+PARTICLE_SPEED_RANGE = (5, 15)        # px/frame, random direction per particle
+PARTICLE_ALPHA_DECAY_RANGE = (0.03, 0.10)  # fraction of CURRENT alpha/frame
+PARTICLE_COUNT_PER_RADIUS = 3         # an event spawns radius * 3 (40 -> 120)
+SPLIT_PARTICLE_COLORS = (YELLOW, RED, ORANGE)   # one, random per particle
+WRECKAGE_BRIGHTNESS_RANGE = (128, 255)  # mid-gray .. white, per particle
+UFO_PARTICLE_COUNT = 100              # flat, per the spec
+
+# --------------------------------------------------------------- thruster
+# Rear-of-ship exhaust while Up is held (spec: "Thrusters"). Purely
+# cosmetic: no collision detection, no screen wrap.
+THRUSTER_PUFFS_PER_FRAME_RANGE = (2, 3)      # random count, per frame
+THRUSTER_PUFF_RADIUS_RANGE = (3, 8)          # px, random per puff
+THRUSTER_BACK_SPEED_RANGE = (6, 10)          # px/frame, added opposite the heading
+THRUSTER_ALPHA_DECAY_RANGE = (0.03, 0.06)    # fraction of current alpha/frame
+THRUSTER_COLORS = (YELLOW, ORANGE, RED)      # one, random per puff
 
 # ------------------------------------------------------------------------ HUD
 # Upper-right HUD (spec: "Heads-up display"). Everything is drawn at a single

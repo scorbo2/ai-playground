@@ -38,6 +38,9 @@ class PauseState(GameModeState):
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill(BLACK)
+        # The starfield is a background, not gameplay content, so it keeps
+        # twinkling behind the PAUSE heading while everything else freezes.
+        self.app.starfield.draw(screen)
         width, height = screen.get_size()
 
         blit_centered(screen, render_text(self.HEADING, HEADING_FONT_SIZE, WHITE),

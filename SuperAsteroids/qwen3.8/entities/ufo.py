@@ -12,11 +12,9 @@ Per the spec (Enemy UFOs):
     (2x2 yellow, half the player's level 1 range) at the craft;
   - destroyed by any player weapon, or by the ramming shield (which also
     bounces the craft per the usual rules); a craft touching one dies -
-    unless the shield is raised.
-
-  Stage note: the 100-particle light red destruction explosion lands in
-  Stage 8 with the particle effects; until then, killing a UFO simply
-  removes it from play.
+    unless the shield is raised. The 100-particle light red destruction
+    explosion is raised by the game state, which is where all impact
+    events are resolved.
 """
 
 import math

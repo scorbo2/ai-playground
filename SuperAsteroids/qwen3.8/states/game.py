@@ -14,14 +14,23 @@ destroy, UFO kills), and the two continuous loops - the thruster loop
 while thrusting and the UFO loop while at least one UFO is active - are
 reconciled with the simulation once per frame.
 
+Stage 8 (cosmetics): explosion particles on every asteroid split and
+destruction and UFO kill, thruster exhaust puffs while Up is held, and
+the app-owned starfield drawn behind everything (it animates in every
+mode, so it needs no state wiring in this file beyond drawing it).
+Level advancement sweeps the particles exactly like every other
+transient object (spec: Game Mode).
+
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
 During it - and while paused - the field is drawn frozen, the craft is
 hidden, no controls work, and no timers (spawn or game time) advance.
 
 Frame order in the playing phase (matters for edge cases):
-  1. movement: craft, asteroids, player projectiles, UFOs (drift plus
-     their cadence shots), UFO projectiles, powerup drift
+  1. movement: craft (emits thruster exhaust while thrusting), asteroids,
+     player projectiles, UFOs (drift plus their cadence shots), UFO
+     projectiles, powerup drift, then the cosmetic particle field
+     advances and its faded members are pruned
   2. spawn timers (powerup, then UFO), then weapon charge drain/recharge
   3. player weapons vs. the world (projectiles, laser beam, shield ram) -
      this is also where UFOs get destroyed by player weapons
@@ -44,6 +53,9 @@ from entities import (PlayerCraft, player_hits_asteroid,
                       player_hits_ufo, spawn_level_asteroids, spawn_ufo)
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
+from effects.particles import (spawn_destruction_explosion,
+                               spawn_split_explosion, spawn_thruster_puffs,
+                               spawn_ufo_explosion)
 from font_manager import render_text
 from game_constants import (
     ASTEROID_MIN_RADIUS_FOR_SPLIT,
@@ -110,6 +122,11 @@ class GameState(GameModeState):
         self._ufo_projectiles: list = []
         self._powerups: list = []
         self._ufos: list = []
+        # Cosmetic-only particles (explosion debris, thruster puffs). They
+        # have no collision role, so they are a simple last-in list and get
+        # swept at the same point as every other transient object
+        # (spec: Game Mode - level advancement).
+        self._particles: list = []
         # The 30-second powerup counter runs ONLY in the playing phase and
         # deliberately survives level advances; a fresh game starts it at
         # full value (spec: Timers / Powerups). The 3-minute UFO counter
@@ -158,6 +175,10 @@ class GameState(GameModeState):
         self._ufo_projectiles = []
         self._powerups = []
         self._ufos = []
+        # Cosmetic debris of the level just left behind dies with it
+        # (spec: "all explosion particles, powerup icons, thruster exhaust
+        # circles, projectiles, and enemy UFOs are removed").
+        self._particles = []
         # Re-arming a still-held space bar would require a fresh press on
         # re-activation anyway, so the hold state is cleared as well.
         self._space_held = False
@@ -292,6 +313,13 @@ class GameState(GameModeState):
         thrusting, turning = self._craft_intents()
         self._craft.update(thrusting, turning, width, height)
         self._sync_sound_loops(thrusting)
+        if thrusting:
+            # Thruster exhaust (spec: Thrusters): every thrusting frame
+            # ejects a random 2-3 puffs. After the craft's motion for this
+            # frame, so puffs are emitted from where the ship IS - the
+            # resulting one-frame offset is deliberate and unperceptible.
+            # Purely cosmetic: no collision, no wrap.
+            self._particles.extend(spawn_thruster_puffs(self._craft))
         for asteroid in self._asteroids:
             asteroid.update(width, height)
         for projectile in self._projectiles:
@@ -307,6 +335,10 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y, width, height))
         for powerup in self._powerups:
             powerup.update(width, height)
+        # Cosmetic particles keep advancing until their alpha fades to 0;
+        # Particle.update() reports its own fade-out, so a filter is the
+        # whole cleanup. (No width/height: particles do not wrap.)
+        self._particles = [p for p in self._particles if p.update()]
         self._tick_powerup_timer(width, height)
         self._tick_ufo_timer(width, height)
         # Charge drain/recharge before collision passes so a beam that
@@ -402,10 +434,12 @@ class GameState(GameModeState):
                 # Asteroid impact event: the projectile is consumed, the
                 # rock is replaced by its split children (or none, if too
                 # small to split - then it is simply destroyed). Impacts
-                # by player weapons are what "Hits" count.
+                # by player weapons are what "Hits" count. Debris bursts
+                # from the projectile's position: the actual contact point.
                 live.remove(asteroid)
                 replacements.extend(self._apply_asteroid_impact(
-                    asteroid, score=True, destroy_outright=False))
+                    asteroid, score=True, destroy_outright=False,
+                    impact_point=(projectile.x, projectile.y)))
                 continue
             powerup = next(
                 (p for p in self._powerups
@@ -466,10 +500,13 @@ class GameState(GameModeState):
                 None,
             )
             if asteroid is not None:
+                # (sx, sy) is the sample that touched the rock - the beam's
+                # true contact point.
                 self._asteroids.remove(asteroid)
                 self._asteroids.extend(self._apply_asteroid_impact(
                     asteroid, score=True,
-                    destroy_outright=weapon.destroys_on_hit()))
+                    destroy_outright=weapon.destroys_on_hit(),
+                    impact_point=(sx, sy)))
                 weapon.deactivate_after_hit()
                 return
             powerup = next(
@@ -537,11 +574,20 @@ class GameState(GameModeState):
             # exactly "directly away from the point of impact".
             dx = shortest_delta(self._craft.x - asteroid.x, width)
             dy = shortest_delta(self._craft.y - asteroid.y, height)
-            if math.hypot(dx, dy) <= weapon.shield_radius + asteroid.radius:
+            length = math.hypot(dx, dy)
+            if length <= weapon.shield_radius + asteroid.radius:
+                # Where the ring actually touches the rock: the debris
+                # bursts from the contact, not from the rock's center.
+                if length > 1e-9:
+                    impact = (self._craft.x - dx / length * weapon.shield_radius,
+                              self._craft.y - dy / length * weapon.shield_radius)
+                else:
+                    impact = (self._craft.x, self._craft.y)  # coincident centers
                 self._asteroids.remove(asteroid)
                 self._asteroids.extend(self._apply_asteroid_impact(
                     asteroid, score=True,
-                    destroy_outright=weapon.destroys_on_hit()))
+                    destroy_outright=weapon.destroys_on_hit(),
+                    impact_point=impact))
                 self._craft.bounce(
                     dx, dy, asteroid.radius / weapon.bounce_divisor)
                 # sfx/README.md: shield_ram is the asteroid-ram cue (a UFO
@@ -597,7 +643,8 @@ class GameState(GameModeState):
                 # stat counts asteroids destroyed by PLAYER weapons only.
                 live.remove(asteroid)
                 replacements.extend(self._apply_asteroid_impact(
-                    asteroid, score=False, destroy_outright=False))
+                    asteroid, score=False, destroy_outright=False,
+                    impact_point=(projectile.x, projectile.y)))
                 continue
             powerup = next(
                 (p for p in self._powerups
@@ -626,12 +673,13 @@ class GameState(GameModeState):
     def _destroy_ufo(self, ufo) -> None:
         """Remove a UFO from play regardless of the cause. The ValueError
         guard matters: several player weapons (or the shield) can target
-        the same UFO in one frame - the destruction SFX plays exactly once,
-        on the removal that actually happens. (The 100-particle light red
-        explosion still lands in Stage 8.)"""
+        the same UFO in one frame - the destruction SFX and the 100-particle
+        light red explosion each fire exactly once, on the removal that
+        actually happens."""
         try:
             self._ufos.remove(ufo)
             self.app.sound.play(SFX_UFO_DESTROYED)
+            self._particles.extend(spawn_ufo_explosion(ufo.x, ufo.y))
         except ValueError:
             pass  # already shredded by another hit this frame
 
@@ -651,25 +699,37 @@ class GameState(GameModeState):
     # ------------------------------------------------------- asteroid impacts
 
     def _apply_asteroid_impact(self, asteroid, score: bool,
-                               destroy_outright: bool) -> list:
+                               destroy_outright: bool,
+                               impact_point: tuple) -> list:
         """Resolve one asteroid being hit. Returns its replacement children.
 
         ``score`` records a player "Hit" - player weapons only (spec:
         Scoring; powerup impacts and UFO-projectile impacts pass False).
         ``destroy_outright`` (laser/shield power 3) skips the split rules
-        entirely. EVERY split and destruction event rolls the level-based
-        powerup drop chance (spec: Powerups) - and plays its cue, whoever
-        (or whatever) delivered the hit, since the sfx README defines both
-        sounds by the EVENT (a split / a destruction), not the cause.
+        entirely. ``impact_point`` is the contact point the debris bursts
+        from - the spec wants particles to "spread out from the point where
+        the collision occurred", not from the rock's center. (The powerup
+        drop, if the roll succeeds, still spawns at the rock's own
+        position: the rock "has" it, whatever touched it.) EVERY split and
+        destruction event rolls the level-based powerup drop chance
+        (spec: Powerups) - and plays its cue, whoever (or whatever)
+        delivered the hit, since the sfx README defines both sounds by the
+        EVENT (a split / a destruction), not the cause.
         """
         if score:
             self._score.record_hit()
         if destroy_outright or asteroid.radius < ASTEROID_MIN_RADIUS_FOR_SPLIT:
             children: list = []
             self.app.sound.play(SFX_ASTEROID_DESTROYED)
+            # Monochrome wreckage: radius * 3 gray particles, 128-255.
+            self._particles.extend(spawn_destruction_explosion(
+                impact_point[0], impact_point[1], asteroid.radius))
         else:
             children = asteroid.split()
             self.app.sound.play(SFX_ASTEROID_SPLIT)
+            # Colorful debris: one random yellow/red/orange per particle.
+            self._particles.extend(spawn_split_explosion(
+                impact_point[0], impact_point[1], asteroid.radius))
         if random.random() < self._powerup_drop_chance():
             self._powerups.append(spawn_drop_powerup(asteroid.x, asteroid.y))
             self.app.sound.play(SFX_POWERUP_SPAWN)
@@ -737,7 +797,8 @@ class GameState(GameModeState):
         without scoring the player (spec: Powerups / Scoring). Each icon
         and rock is consumed at most once per frame."""
         consumed_icons: set = set()
-        impacted_rocks: set = set()
+        # Rock id -> the icon position that hit it (the debris origin).
+        impacted_rocks: dict = {}
         for powerup in self._powerups:
             if powerup.in_grace:
                 continue
@@ -747,7 +808,7 @@ class GameState(GameModeState):
                 if powerup.overlaps_circle(asteroid.x, asteroid.y,
                                            asteroid.radius, width, height):
                     consumed_icons.add(id(powerup))
-                    impacted_rocks.add(id(asteroid))
+                    impacted_rocks[id(asteroid)] = (powerup.x, powerup.y)
                     break  # one rock per icon per frame
         for powerup in self._powerups:
             if id(powerup) in consumed_icons:
@@ -759,7 +820,8 @@ class GameState(GameModeState):
             if id(asteroid) in impacted_rocks:
                 self._asteroids.remove(asteroid)
                 self._asteroids.extend(self._apply_asteroid_impact(
-                    asteroid, score=False, destroy_outright=False))
+                    asteroid, score=False, destroy_outright=False,
+                    impact_point=impacted_rocks[id(asteroid)]))
 
     def _destroy_powerup(self, powerup) -> None:
         """Remove an icon from play regardless of the cause (projectile,
@@ -786,6 +848,8 @@ class GameState(GameModeState):
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill(BLACK)
+        # Starfield first: it underlies every mode's content (spec).
+        self.app.starfield.draw(screen)
         for asteroid in self._asteroids:
             asteroid.draw(screen)
         if self._phase == self.PHASE_PLAYING:
@@ -797,6 +861,14 @@ class GameState(GameModeState):
                 projectile.draw(screen)
             for projectile in self._ufo_projectiles:
                 projectile.draw(screen)
+            # Debris and exhaust over the field, under the craft and beam:
+            # an explosion reads as happening IN the world the craft flies
+            # through, not on top of the player's own ship. (The list is
+            # always empty during the intro - level advance sweeps it and
+            # nothing emits while the field is frozen - so the
+            # PHASE_PLAYING guard exists to document that invariant.)
+            for particle in self._particles:
+                particle.draw(screen)
             self._weapon.draw(screen, self._craft)
             self._craft.draw(screen)
         draw_game_hud(screen, self._hud_data())

@@ -1,10 +1,10 @@
 """Title Screen Mode.
 
 The background shows a subtle field of 3-6 large asteroids gently tumbling
-with screen wrap - cosmetic only: they do not collide or split, and they are
-discarded whenever a new game starts (a fresh Game Mode state spawns its own
-field). Enter starts Game Mode at level 1; ESC exits the application with
-exit code 0 (normal termination). The starfield background arrives in Stage 8.
+with screen wrap over the starfield - cosmetic only: they do not collide or
+split, and they are discarded whenever a new game starts (a fresh Game Mode
+state spawns its own field). Enter starts Game Mode at level 1; ESC exits
+the application with exit code 0 (normal termination).
 """
 
 import pygame
@@ -54,6 +54,8 @@ class TitleScreenState(GameModeState):
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill(BLACK)
+        # Starfield in all modes (spec: Starfield background).
+        self.app.starfield.draw(screen)
         for asteroid in self._asteroids:
             asteroid.draw(screen)
 

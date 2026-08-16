@@ -5,7 +5,9 @@ Screen angles are used throughout (degrees, 0 = +X axis, positive toward
 polygons - so "up" is PLAYER_START_ANGLE (-90) and the rotation math below
 is identical in spirit to the asteroid tumble.
 
-No weapons yet: Space does nothing until Stage 4.
+The craft owns no weapons: Space handling, projectile spawning, and beam
+geography all live in the weapons package, which reads the craft's
+position/velocity/angle through plain attributes.
 """
 
 import math
