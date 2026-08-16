@@ -1,20 +1,36 @@
 """Game Mode.
 
-Stage 1 notes: placeholder screen only ("GAME MODE" in large white letters,
-centered). ESC pauses. Asteroids, the player craft, weapons, and the path
-to Game Over mode all land in Stages 2-4.
+Stage 2: the asteroid field is real - level 1 starts with 5 large asteroids
+spawning safely away from where the player's ship will appear (the screen
+center). The ship itself, the "BEGIN LEVEL N" intro, weapons, collision and
+level advancement land in Stages 3-4. ESC pauses.
 """
 
 import pygame
 
-from font_manager import blit_centered, render_text
-from game_constants import BLACK, HEADING_FONT_SIZE, WHITE
+from entities import spawn_level_asteroids
+from game_constants import BLACK, LEVEL_1_ASTEROID_COUNT
 from states.base import GameModeState
 
 
 class GameState(GameModeState):
 
-    PLACEHOLDER_HEADING = "GAME MODE"
+    LEVEL_1 = 1
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.level = self.LEVEL_1
+        # Asteroids to spawn on the NEXT level. Level 1 is fixed at 5; each
+        # later advancement rolls +1 or +2 (Stage 4 owns that roll).
+        self._next_level_asteroid_count = LEVEL_1_ASTEROID_COUNT
+        width, height = app.screen.get_size()
+        # The ship has not landed yet (Stage 3), but the spec keeps level
+        # spawns 200px clear of it - and it will appear at screen center.
+        ship_position = (width // 2, height // 2)
+        self._asteroids = spawn_level_asteroids(
+            self.level, self._next_level_asteroid_count,
+            width, height, ship_position,
+        )
 
     def handle_events(self, events: list) -> None:
         for event in events:
@@ -22,12 +38,13 @@ class GameState(GameModeState):
                 self.app.to_pause()
 
     def update(self) -> None:
-        # Stage 2+ fills this in: level intro, asteroids, player craft, weapons.
-        pass
+        # The live window size keeps wrapping correct immediately after a
+        # resize (the spec's "forced screen wrap" requirement).
+        width, height = self.app.screen.get_size()
+        for asteroid in self._asteroids:
+            asteroid.update(width, height)
 
     def draw(self, screen: pygame.Surface) -> None:
         screen.fill(BLACK)
-        width, height = screen.get_size()
-        blit_centered(screen,
-                      render_text(self.PLACEHOLDER_HEADING, HEADING_FONT_SIZE, WHITE),
-                      (width // 2, height // 2))
+        for asteroid in self._asteroids:
+            asteroid.draw(screen)

@@ -1,8 +1,11 @@
 """Pause Mode.
 
-Stage 1 notes: there are no game objects to hide yet, so the screen is just
-black plus the PAUSE heading and hints. ESC resumes Game Mode; the ``x`` key
-abandons the current game and returns to Title Screen Mode.
+The frozen game in progress is fully hidden - the black background plus the
+PAUSE heading and hints is everything that draws (spec: hide all asteroids,
+craft, and the HUD). No timers advance, because the frozen GameState simply
+does not receive ``update()`` while it is parked. ESC resumes that SAME
+frozen game state via ``app.resume()``; the ``x`` key abandons the current
+game and returns to Title Screen Mode.
 """
 
 import pygame
@@ -28,7 +31,8 @@ class PauseState(GameModeState):
             if event.type != pygame.KEYDOWN:
                 continue
             if event.key == pygame.K_ESCAPE:
-                self.app.to_game()
+                # Restore the SAME frozen game state - never a fresh one.
+                self.app.resume()
             elif event.key == pygame.K_x:  # K_x covers both 'x' and 'X'
                 self.app.to_title()
 

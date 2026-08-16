@@ -36,6 +36,8 @@ class SuperAsteroidsApp:
 
         self._running = True
         self._state = TitleScreenState(self)
+        # The GameState frozen by to_pause(), restored by resume().
+        self._paused_state: Optional[GameModeState] = None
 
         # F11 state: _is_fullscreen mirrors the real window state, and the
         # windowed geometry is saved on enter so we can restore it exactly on
@@ -57,17 +59,30 @@ class SuperAsteroidsApp:
         return self._state
 
     def to_title(self) -> None:
+        self._paused_state = None
         self._state = TitleScreenState(self)
 
     def to_game(self) -> None:
-        # Stage 1: placeholder screen. Later stages build the real game here.
+        # Always a NEW game: any paused state is discarded and a fresh
+        # GameState is built (the ship and level state land in Stages 3-4).
+        self._paused_state = None
         self._state = GameState(self)
 
     def to_pause(self) -> None:
+        # Freeze: the running GameState is saved and restored AS-IS on
+        # resume (spec: "the game in progress is frozen in place" - a
+        # resume must NOT rebuild the level).
+        self._paused_state = self._state
         self._state = PauseState(self)
 
+    def resume(self) -> None:
+        """Restore the frozen GameState exactly as it was when paused."""
+        if self._paused_state is not None:
+            self._state = self._paused_state
+            self._paused_state = None
+
     def to_game_over(self, special_message: str | None = None) -> None:
-        # Not reachable in Stage 1; later stages call this on player death.
+        # Not reachable in Stage 2; later stages call this on player death.
         self._state = GameOverState(self, special_message)
 
     def quit(self) -> None:

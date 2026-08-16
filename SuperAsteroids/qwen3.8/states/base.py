@@ -24,8 +24,9 @@ class GameModeState(ABC):
         or terminate the application."""
 
     def update(self) -> None:
-        """Per-frame simulation step. Stage 1 has no game objects yet, so
-        later stages will override this."""
+        """Per-frame simulation step. The default is a no-op; states that
+        own game objects (asteroids, later the ship and weapons) override
+        it to advance the simulation."""
 
     @abstractmethod
     def draw(self, screen: pygame.Surface) -> None:

@@ -45,3 +45,37 @@ TITLE_SCREEN_CONTROL_LINES = (
     "ESC: exit",
 )
 TITLE_SCREEN_START_PROMPT = "Press Enter to start"
+
+# ------------------------------------------------------------------ asteroids
+# Per-level spawn rules. Speed range is a pure function of the level number,
+# but the COUNT is not: it grows by a random 1-2 on each level advancement,
+# so the owning game state tracks the current count and passes it in
+# (Stage 4 wires up the advancement trigger itself).
+LEVEL_1_ASTEROID_COUNT = 5
+LEVEL_ASTEROID_COUNT_INCREMENT = (1, 2)        # random, per level advancement
+ASTEROID_LARGEST_RADIUS = 40                   # level-start asteroids
+ASTEROID_MIN_SPEED = 1.5                       # px/frame, level 1 lower bound
+ASTEROID_MAX_SPEED = 2.5                       # px/frame, level 1 upper bound
+ASTEROID_SPEED_INCREMENT_PER_LEVEL = 0.3       # added to both bounds, no cap
+ASTEROID_PLAYER_SAFE_DISTANCE = 200            # px; never spawn closer than this
+ASTEROID_SPAWN_ATTEMPTS = 50                   # random tries before a corner
+# Tumbling. Rotates inversely with size: radius >= LARGE is 1 deg/frame,
+# radius <= SMALL is 10 deg/frame, linearly interpolated between the anchors.
+ASTEROID_ROTATION_RADIUS_LARGE = 40
+ASTEROID_ROTATION_RATE_LARGE = 1.0             # degrees/frame
+ASTEROID_ROTATION_RADIUS_SMALL = 20
+ASTEROID_ROTATION_RATE_SMALL = 10.0            # degrees/frame
+# Weapon impact -> split rules (stages 4-6 trigger these). Radius below the
+# split threshold is destroyed outright instead of splitting further.
+ASTEROID_MIN_RADIUS_FOR_SPLIT = 20
+ASTEROID_SPLIT_CHILDREN = (2, 3)               # random per impact
+ASTEROID_SPLIT_RADIUS_DIVISOR = 1.5
+ASTEROID_SPLIT_SPEED_MULTIPLIER = 1.2
+# Irregular outline, per the spec's suggested generation.
+ASTEROID_VERTEX_COUNT_RANGE = (8, 14)
+ASTEROID_VERTEX_RADIUS_FACTOR_RANGE = (0.75, 1.25)
+ASTEROID_OUTLINE_WIDTH = 2
+
+# ------------------------------------------------------------- title screen
+# Cosmetic asteroids: same movement, tumbling, and wrapping as game asteroids.
+TITLE_ASTEROID_COUNT_RANGE = (3, 6)
