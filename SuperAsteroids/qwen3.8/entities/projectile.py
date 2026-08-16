@@ -1,13 +1,15 @@
-"""Cannon projectile: a 2x2 px yellow block with a fixed travel budget.
+"""Cannon projectile: a small square block with a fixed travel budget.
 
 Per the spec (Weapons -> Cannon):
-  - initial velocity = craft velocity + CANNON_PROJECTILE_SPEED in the
-    craft's facing direction (set by the weapon that spawns it);
+  - initial velocity = craft velocity plus the level's projectile speed in
+    the craft's facing direction (set by the weapon that spawns it);
   - travels CANNON_PROJECTILE_DISTANCE pixels CUMULATIVELY - screen wraps
-    are transparent to the counter, exactly N px of flight always count;
+    are transparent to the counter, exactly N px of flight always count
+    (the budget is an instance field so Stage 6's shorter-range UFO
+    projectiles can reuse this class);
   - has a CANNON_SELF_GRACE frame window during which it can trigger every
     impact EXCEPT the one with its own craft (self-immunity only, spec);
-  - impacts use the projectile's EXACT 2x2 shape, not a bounding circle.
+  - impacts use the projectile's EXACT square shape, not a bounding circle.
 """
 
 import math
@@ -25,17 +27,22 @@ from position_utils import wrap_around, wrapped_circle_hits_box
 
 class CannonProjectile:
 
-    def __init__(self, x: float, y: float, vx: float, vy: float):
+    def __init__(self, x: float, y: float, vx: float, vy: float,
+                 size: int = CANNON_PROJECTILE_SIZE, color=YELLOW,
+                 distance_limit: float = CANNON_PROJECTILE_DISTANCE):
         self.x = x
         self.y = y
         self.vx = vx
         self.vy = vy
+        self.size = size
+        self.color = color
         self.distance_traveled = 0.0
+        self.distance_limit = distance_limit
         self.grace_frames = CANNON_SELF_GRACE
 
     @property
     def half_size(self) -> float:
-        return CANNON_PROJECTILE_SIZE / 2
+        return self.size / 2
 
     @property
     def can_hit_player(self) -> bool:
@@ -45,7 +52,7 @@ class CannonProjectile:
 
     @property
     def expired(self) -> bool:
-        return self.distance_traveled >= CANNON_PROJECTILE_DISTANCE
+        return self.distance_traveled >= self.distance_limit
 
     def update(self, width: int, height: int) -> None:
         self.x += self.vx
@@ -66,7 +73,7 @@ class CannonProjectile:
 
     def draw(self, screen: pygame.Surface) -> None:
         pygame.draw.rect(
-            screen, YELLOW,
+            screen, self.color,
             (int(self.x - self.half_size), int(self.y - self.half_size),
-             CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SIZE),
+             self.size, self.size),
         )

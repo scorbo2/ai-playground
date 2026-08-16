@@ -5,6 +5,8 @@ projectiles, thruster exhaust, UFOs, and powerups (later stages) will join
 them, so the modulo math lives in exactly one place.
 """
 
+import math
+
 
 def wrap_around(x: float, y: float, radius: float,
                 width: int, height: int) -> tuple:
@@ -34,6 +36,18 @@ def shortest_delta(delta: float, extent: float) -> float:
     if delta > extent / 2:
         delta -= extent
     return delta
+
+
+def torus_distance(x1: float, y1: float, x2: float, y2: float,
+                   width: int, height: int) -> float:
+    """Center-to-center distance between two points on the wrapped screen.
+
+    Each axis folds across the wrap first, so a craft 5 px from the left
+    edge is correctly seen as close to an object 5 px from the right edge.
+    """
+    dx = abs(shortest_delta(x1 - x2, width))
+    dy = abs(shortest_delta(y1 - y2, height))
+    return math.hypot(dx, dy)
 
 
 def wrapped_circle_hits_box(cx: float, cy: float, radius: float,

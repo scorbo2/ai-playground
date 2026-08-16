@@ -23,7 +23,6 @@ from game_constants import (
     ASTEROID_MIN_RADIUS_FOR_SPLIT,
     ASTEROID_MIN_SPEED,
     ASTEROID_OUTLINE_WIDTH,
-    ASTEROID_PLAYER_SAFE_DISTANCE,
     ASTEROID_ROTATION_RADIUS_LARGE,
     ASTEROID_ROTATION_RADIUS_SMALL,
     ASTEROID_ROTATION_RATE_LARGE,
@@ -35,6 +34,7 @@ from game_constants import (
     ASTEROID_SPLIT_SPEED_MULTIPLIER,
     ASTEROID_VERTEX_COUNT_RANGE,
     ASTEROID_VERTEX_RADIUS_FACTOR_RANGE,
+    CRAFT_SPAWN_SAFE_DISTANCE,
     TITLE_ASTEROID_COUNT_RANGE,
     WHITE,
 )
@@ -170,13 +170,13 @@ def _make_asteroid(radius: float, speed_range: tuple, position: tuple) -> Astero
 
 
 def _position_away_from_ship(width: int, height: int, ship_position: tuple) -> tuple:
-    """A random position at least ASTEROID_PLAYER_SAFE_DISTANCE from the
+    """A random position at least CRAFT_SPAWN_SAFE_DISTANCE from the
     player's ship, falling back to a random screen corner after a fixed
     number of failed attempts (spec: "fall back to any screen corner")."""
     ship_x, ship_y = ship_position
     for _ in range(ASTEROID_SPAWN_ATTEMPTS):
         x, y = random.uniform(0.0, width), random.uniform(0.0, height)
-        if math.hypot(x - ship_x, y - ship_y) >= ASTEROID_PLAYER_SAFE_DISTANCE:
+        if math.hypot(x - ship_x, y - ship_y) >= CRAFT_SPAWN_SAFE_DISTANCE:
             return (x, y)
     return random.choice(((0, 0), (width, 0), (0, height), (width, height)))
 

@@ -1,9 +1,9 @@
 """SuperAsteroids - entry point.
 
-Run with:  python3 main.py [--test]
+Run with:  python3 main.py [--test] [--debug]
 
-``--nosound`` (Stage 7) and ``--debug`` (Stage 5) will be added here as
-their features land in the development plan.
+``--nosound`` (Stage 7) will be added here as its feature lands in the
+development plan.
 """
 
 import argparse
@@ -21,14 +21,20 @@ def parse_args(argv=None) -> argparse.Namespace:
         "--test",
         action="store_true",
         help="start the title screen, then exit after 250 ms with exit code 0 "
-             "(confirms the game starts up correctly)",
+              "(confirms the game starts up correctly)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="enable debug hotkeys in Game Mode: C/L/S spawn a Cannon/Laser/"
+              "Shield powerup, U spawns an enemy UFO (Stage 6)",
     )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    app = SuperAsteroidsApp(test_mode=args.test)
+    app = SuperAsteroidsApp(test_mode=args.test, debug_mode=args.debug)
     return app.run()
 
 

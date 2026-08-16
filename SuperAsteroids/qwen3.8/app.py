@@ -27,8 +27,11 @@ from states import GameModeState, GameOverState, GameState, PauseState, TitleScr
 class SuperAsteroidsApp:
     """Owns the display, clock, and current mode, and runs the main loop."""
 
-    def __init__(self, test_mode: bool = False):
+    def __init__(self, test_mode: bool = False, debug_mode: bool = False):
         self.test_mode = test_mode
+        # --debug (spec: "Debug option"): enables cheat hotkeys in Game
+        # Mode (powerup spawning now, UFO spawning from Stage 6).
+        self.debug_mode = debug_mode
         pygame.init()
         self.screen = pygame.display.set_mode(INITIAL_WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption("SuperAsteroids")

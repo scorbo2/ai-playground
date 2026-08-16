@@ -57,7 +57,9 @@ ASTEROID_LARGEST_RADIUS = 40                   # level-start asteroids
 ASTEROID_MIN_SPEED = 1.5                       # px/frame, level 1 lower bound
 ASTEROID_MAX_SPEED = 2.5                       # px/frame, level 1 upper bound
 ASTEROID_SPEED_INCREMENT_PER_LEVEL = 0.3       # added to both bounds, no cap
-ASTEROID_PLAYER_SAFE_DISTANCE = 200            # px; never spawn closer than this
+# Spawn clearance shared by EVERY spawn rule that must keep away from the
+# craft (level asteroids, --debug powerups): never closer than this.
+CRAFT_SPAWN_SAFE_DISTANCE = 200            # px; never spawn closer than this
 ASTEROID_SPAWN_ATTEMPTS = 50                   # random tries before a corner
 # Tumbling. Rotates inversely with size: radius >= LARGE is 1 deg/frame,
 # radius <= SMALL is 10 deg/frame, linearly interpolated between the anchors.
@@ -98,15 +100,78 @@ PLAYER_MAX_SPEED = 8.0                 # px/frame, clamped after thrust
 PLAYER_FRICTION = 0.98                 # velocity multiplier/frame when not thrusting
 PLAYER_STALL_SPEED = 0.05              # px/frame; below this, speed snaps to 0
 
+# ------------------------------------------------------------- weapon system
+# Shared by the charged weapons (Laser + Ramming Shield): 100 units of
+# charge, activation blocked below 20, power levels capped at 3.
+WEAPON_CHARGE_MAX = 100
+WEAPON_MIN_ACTIVATE_CHARGE = 20
+MAX_WEAPON_POWER = 3
+
 # --------------------------------------------------------------------- cannon
-# Level 1 cannon (Stage 4); power levels 2-3 land with powerups in Stage 5.
 CANNON_PROJECTILE_SIZE = 2             # px: projectiles are 2x2 square blocks
 CANNON_PROJECTILE_SPEED = 6            # px/frame added to craft velocity
 CANNON_PROJECTILE_DISTANCE = 1000      # px cumulative travel before expiring
-                                       # (wraps are transparent to this counter)
+                                        # (wraps are transparent to this counter)
 CANNON_MAX_PROJECTILES_L1 = 3          # in-flight cap at power level 1
+CANNON_PROJECTILE_SIZE_L3 = 4          # px: level 3 projectiles are 4x4 blocks
+CANNON_PROJECTILE_SPEED_L3 = 8         # px/frame (levels 1-2 stay at 6)
+CANNON_ARC_DEGREES_L2 = 20             # the 3-shot fan, levels 2 and 3
+CANNON_MAX_PROJECTILES_L2 = 9          # in-flight cap at power level 2
+# One row per power level (index = power_level - 1):
+# (shots per press, arc degrees, projectile size, speed, color, in-flight cap).
+# cap None = unlimited (level 3). A press is blocked when in_flight +
+# shots_per_press would exceed the cap - which reproduces the spec's level 1
+# rule ("cap of 3") and level 2 rule ("more than 6 in flight -> nothing").
+CANNON_LEVEL_SPECS = (
+    (1, 0, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED, YELLOW,
+     CANNON_MAX_PROJECTILES_L1),
+    (3, CANNON_ARC_DEGREES_L2, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED,
+     ORANGE, CANNON_MAX_PROJECTILES_L2),
+    (3, CANNON_ARC_DEGREES_L2, CANNON_PROJECTILE_SIZE_L3,
+     CANNON_PROJECTILE_SPEED_L3, WHITE, None),
+)
 CANNON_SELF_GRACE = 30                 # frames a projectile cannot hit its own craft
 FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE!"
+
+# -------------------------------------------------------------------- laser
+# One tuple per power level (index = power_level - 1). Level 3 keeps level 2's
+# drain/recharge rates and goes white (the beam color is derived in Laser).
+LASER_WIDTHS = (1, 2, 3)               # px
+LASER_LENGTHS = (100, 125, 150)        # px, from the craft's tip
+LASER_DRAIN = (3, 2, 2)                # charge units/frame while the key is held
+LASER_RECHARGE = (1, 2, 2)             # charge units/frame once released
+LASER_SAMPLE_STEP = 2                  # px per collision sample (spec suggestion)
+
+# ------------------------------------------------------------------- shield
+SHIELD_RADII = (35, 35, 40)            # px around the craft
+SHIELD_BORDER_WIDTHS = (1, 2, 4)       # px
+SHIELD_DRAIN = (5, 3, 3)               # charge units/frame while the key is held
+SHIELD_RECHARGE = (1, 3, 3)            # charge units/frame once released
+# Ramming bounce speed = impacting radius / divisor (spec: 40 px rock at
+# level 1 -> 40/5 = 8 px/frame, the craft's max speed).
+SHIELD_BOUNCE_DIVISORS = (5, 8, 10)
+
+# ------------------------------------------------------------------ powerups
+POWERUP_RADIUS = 20                    # px
+POWERUP_SPEED = 2                      # px/frame drift
+POWERUP_INTERVAL = 30 * 60             # 1800 frames of active play
+POWERUP_GRACE = 90                     # frames a fresh icon cannot be destroyed
+POWERUP_SPAWN_ATTEMPTS = 50            # clearance-check tries for timer spawns
+POWERUP_TYPES = (
+    ("Cannon", YELLOW, "C"),           # (weapon name, icon color, label letter)
+    ("Laser", LIGHT_BLUE, "L"),
+    ("Shield", RED, "S"),
+)
+POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
+POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
+# Chance of a powerup drop on every asteroid split/destruction event, by
+# level; level 5+ clamps to the last entry (1%).
+POWERUP_DROP_CHANCES = (0.08, 0.06, 0.04, 0.02, 0.01)
+
+# -------------------------------------------------------------------- debug
+# --debug hotkeys: C/L/S spawn a powerup of that type (no cap), U spawns a
+# UFO (Stage 6). Spawned powerup positions avoid the craft's safe distance.
+DEBUG_SPAWN_ATTEMPTS = 50
 
 # -------------------------------------------------------------- level intro
 # "BEGIN LEVEL N" sequence at the start of every level (spec: Game Mode):
@@ -127,3 +192,4 @@ HUD_FONT_SIZE = 18                     # "scale to fit": lines shrink to fit
 HUD_LINE_SPACING = 18
 HUD_TEXT_PADDING = 8
 HUD_MIN_FONT_SIZE = 10                 # floor for the fit-to-width shrink
+HUD_CHARGE_BAR_HEIGHT = 10             # px tall, inside its 18px line slot

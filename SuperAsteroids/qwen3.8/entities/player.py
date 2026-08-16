@@ -111,6 +111,22 @@ class PlayerCraft:
             self.vx = 0.0
             self.vy = 0.0
 
+    def bounce(self, direction_x: float, direction_y: float, speed: float) -> None:
+        """Ramming-shield response (spec: Weapons -> Ramming Shield): the
+        craft's current direction/velocity is DISCARDED and replaced with
+        ``speed`` px/frame directly away from the impact point, clamped to
+        the max craft speed."""
+        length = math.hypot(direction_x, direction_y)
+        if length <= 1e-9:
+            # Degenerate (centers coincident): no defined "away" direction.
+            return
+        self.vx = direction_x / length * speed
+        self.vy = direction_y / length * speed
+        if self.speed > PLAYER_MAX_SPEED:
+            scale = PLAYER_MAX_SPEED / self.speed
+            self.vx *= scale
+            self.vy *= scale
+
 
 def player_hits_asteroid(craft: PlayerCraft, asteroid,
                          width: int, height: int) -> bool:
