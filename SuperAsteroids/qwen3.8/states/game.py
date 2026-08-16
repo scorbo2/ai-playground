@@ -8,6 +8,12 @@ spawn clock (max 3 active, survives level advances), straight drift with
 periodic deflection, their 120-frame firing cadence aimed at the craft,
 powerup stealing, and the full UFO collision matrix from the spec.
 
+Stage 7 (sound): every gameplay event plays its SFX from sfx/ (weapon
+activations, rams, asteroid split/destruction, powerup spawn/collect/
+destroy, UFO kills), and the two continuous loops - the thruster loop
+while thrusting and the UFO loop while at least one UFO is active - are
+reconciled with the simulation once per frame.
+
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
 During it - and while paused - the field is drawn frozen, the craft is
@@ -63,8 +69,22 @@ from game_constants import (
 from hud import HudData, draw_game_hud
 from position_utils import shortest_delta, torus_distance, wrap_around
 from score import ScoreTracker
+from sound import (
+    SFX_ASTEROID_DESTROYED,
+    SFX_ASTEROID_SPLIT,
+    SFX_CANNON_BY_LEVEL,
+    SFX_LASER_BY_LEVEL,
+    SFX_POWERUP_COLLECTED,
+    SFX_POWERUP_DESTROYED,
+    SFX_POWERUP_SPAWN,
+    SFX_SHIELD_ACTIVATED,
+    SFX_SHIELD_RAM,
+    SFX_THRUSTERS,
+    SFX_UFO,
+    SFX_UFO_DESTROYED,
+)
 from states.base import GameModeState
-from weapons import ChargedWeapon, Laser, RammingShield, make_weapon
+from weapons import Cannon, ChargedWeapon, Laser, RammingShield, make_weapon
 
 
 class GameState(GameModeState):
@@ -181,9 +201,26 @@ class GameState(GameModeState):
     def _on_weapon_press(self) -> None:
         """One space press: the cannon spawns projectiles, the charged
         weapons arm their beam/shield. ONLY a successful activation
-        records a shot (spec: "Weapon activation")."""
+        records a shot (spec: "Weapon activation") - or plays its SFX:
+        the firing sounds key off the same success, so a blocked press
+        (projectile cap, charge below 20) is silent and not counted."""
         if self._weapon.on_press(self._craft, self._projectiles):
             self._score.record_shot()
+            self._play_weapon_activation_sound()
+
+    def _play_weapon_activation_sound(self) -> None:
+        """The SFX for one successful activation (sfx/README.md): the
+        cannon and laser each have a per-power-level shot, the shield one
+        sound for any level."""
+        if isinstance(self._weapon, Cannon):
+            name = SFX_CANNON_BY_LEVEL[self._weapon.index()]
+        elif isinstance(self._weapon, Laser):
+            name = SFX_LASER_BY_LEVEL[self._weapon.index()]
+        elif isinstance(self._weapon, RammingShield):
+            name = SFX_SHIELD_ACTIVATED
+        else:
+            return
+        self.app.sound.play(name)
 
     def _handle_debug_key(self, key: int) -> None:
         # --debug cheat keys (spec: "Debug option"). Only meaningful in
@@ -210,6 +247,8 @@ class GameState(GameModeState):
         width, height = self.app.screen.get_size()
         x, y = self._debug_spawn_point(width, height)
         self._powerups.append(Powerup(x, y, weapon_name))
+        # A powerup icon has appeared - cheat or not, the same cue applies.
+        self.app.sound.play(SFX_POWERUP_SPAWN)
 
     def _debug_spawn_point(self, width: int, height: int) -> tuple:
         """A random screen point at least CRAFT_SPAWN_SAFE_DISTANCE from the
@@ -239,6 +278,11 @@ class GameState(GameModeState):
                 # player may be holding can count as having been pressed.
                 self._held_keys.clear()
                 self._space_held = False
+            # Nothing may be heard during the intro (no thrust, no UFOs -
+            # they always leave play on level advance): sync to the empty
+            # set rather than letting a loop from the previous level run
+            # on under the "BEGIN LEVEL N" text.
+            self._sync_sound_loops(thrusting=False)
             return
 
         self._game_time_frames += 1
@@ -247,6 +291,7 @@ class GameState(GameModeState):
         width, height = self.app.screen.get_size()
         thrusting, turning = self._craft_intents()
         self._craft.update(thrusting, turning, width, height)
+        self._sync_sound_loops(thrusting)
         for asteroid in self._asteroids:
             asteroid.update(width, height)
         for projectile in self._projectiles:
@@ -270,7 +315,8 @@ class GameState(GameModeState):
 
         if not self._resolve_weapon_hits(width, height):
             return  # friendly fire already took us to Game Over
-        self._resolve_ufo_projectile_hits(width, height)
+        if not self._resolve_ufo_projectile_hits(width, height):
+            return  # hostile fire already took us to Game Over
         if self._resolve_craft_deaths(width, height):
             return
         self._collect_powerups(width, height)
@@ -287,13 +333,16 @@ class GameState(GameModeState):
             self._powerups.append(spawn_timer_powerup(
                 width, height, (self._craft.x, self._craft.y),
                 self._asteroids))
+            self.app.sound.play(SFX_POWERUP_SPAWN)
 
     def _tick_ufo_timer(self, width: int, height: int) -> None:
         """The 3-minute spawn clock (frames, paused with the game).
 
         Persists across level advances; only a brand-new game starts it
         fresh (spec: Enemy UFOs). An expiration at the 3-UFO cap does NOT
-        carry over - the timer just restarts, as the spec requires.
+        carry over - the timer just restarts, as the spec requires. The
+        UFO hum loop that follows a spawn is not started here: the
+        per-frame loop sync in update() picks up the new UFO next frame.
         """
         self._ufo_timer -= 1
         if self._ufo_timer > 0:
@@ -303,6 +352,25 @@ class GameState(GameModeState):
             return  # at cap: reset only, no spawn (spec)
         self._ufos.append(spawn_ufo(
             width, height, (self._craft.x, self._craft.y)))
+
+    def _sync_sound_loops(self, thrusting: bool) -> None:
+        """Reconcile the continuous SFX with the simulation (spec: Sound):
+        the thruster loop sounds only while Up is applied, the UFO hum only
+        while at least one UFO is active (it keeps going while several UFOs
+        remain and stops when the last one is destroyed).
+
+        The app clears the loop set on every pause / game-over / mode
+        transition, so this per-frame call is also what re-establishes it
+        after a resume. The manager only starts/stops on set CHANGES, so
+        calling it every frame is cheap and cannot re-stutter a running
+        loop.
+        """
+        wanted: set = set()
+        if self._ufos:
+            wanted.add(SFX_UFO)
+        if thrusting:
+            wanted.add(SFX_THRUSTERS)
+        self.app.sound.set_active_loops(frozenset(wanted))
 
     # ------------------------------------------------------------- weapon hits
 
@@ -443,14 +511,22 @@ class GameState(GameModeState):
         if not self._shield_rams_asteroid(weapon, width, height):
             self._shield_rams_ufo(weapon, width, height)
         # Icons touching the ring outside their grace period are destroyed
-        # (spec). In-grace icons are untouched: the craft may still collect
-        # them in _collect_powerups() while the shield is raised.
-        self._powerups = [
-            p for p in self._powerups
-            if not (not p.in_grace and p.overlaps_circle(
-                self._craft.x, self._craft.y, weapon.shield_radius,
-                width, height))
-        ]
+        # - through _destroy_powerup so they get the same destruction cue
+        # as every other destroy path (spec: "by any means"). In-grace
+        # icons are untouched: the craft may still collect them in
+        # _collect_powerups() while the shield is raised. An explicit loop
+        # rather than a comprehension filter: _destroy_powerup mutates
+        # self._powerups (via .remove), which the loop must not race.
+        survivors = []
+        for powerup in self._powerups:
+            if (not powerup.in_grace
+                    and powerup.overlaps_circle(
+                        self._craft.x, self._craft.y, weapon.shield_radius,
+                        width, height)):
+                self._destroy_powerup(powerup)
+            else:
+                survivors.append(powerup)
+        self._powerups = survivors
 
     def _shield_rams_asteroid(self, weapon: RammingShield,
                               width: int, height: int) -> bool:
@@ -468,6 +544,9 @@ class GameState(GameModeState):
                     destroy_outright=weapon.destroys_on_hit()))
                 self._craft.bounce(
                     dx, dy, asteroid.radius / weapon.bounce_divisor)
+                # sfx/README.md: shield_ram is the asteroid-ram cue (a UFO
+                # ram has its own ufo_destroyed cue and no ram cue).
+                self.app.sound.play(SFX_SHIELD_RAM)
                 return True
         return False
 
@@ -488,8 +567,9 @@ class GameState(GameModeState):
 
     # ---------------------------------------------------------------- enemy fire
 
-    def _resolve_ufo_projectile_hits(self, width: int, height: int) -> None:
-        """Hostile shots vs. the world (spec: Enemy UFOs).
+    def _resolve_ufo_projectile_hits(self, width: int, height: int) -> bool:
+        """Hostile shots vs. the world (spec: Enemy UFOs). Returns False iff
+        the craft died to a hostile shot (GameOver already triggered).
 
         Rules, in arbitration order: asteroids split/destroy WITHOUT
         scoring the player; powerup icons are destroyed (out of grace
@@ -534,21 +614,24 @@ class GameState(GameModeState):
                     width, height):
                 continue  # absorbed by the raised shield (spec)
             if projectile.hits_circle(self._craft.x, self._craft.y,
-                                      PLAYER_RADIUS, width, height):
+                                       PLAYER_RADIUS, width, height):
                 self.app.to_game_over(HOSTILE_FIRE_MESSAGE)
-                return
+                return False
             if not projectile.expired:
                 survivors.append(projectile)
         self._ufo_projectiles = survivors
         self._asteroids = live + replacements
+        return True
 
     def _destroy_ufo(self, ufo) -> None:
         """Remove a UFO from play regardless of the cause. The ValueError
         guard matters: several player weapons (or the shield) can target
-        the same UFO in one frame. (Stage 7/8 will hook destruction SFX
-        and the particle explosion here.)"""
+        the same UFO in one frame - the destruction SFX plays exactly once,
+        on the removal that actually happens. (The 100-particle light red
+        explosion still lands in Stage 8.)"""
         try:
             self._ufos.remove(ufo)
+            self.app.sound.play(SFX_UFO_DESTROYED)
         except ValueError:
             pass  # already shredded by another hit this frame
 
@@ -575,16 +658,21 @@ class GameState(GameModeState):
         Scoring; powerup impacts and UFO-projectile impacts pass False).
         ``destroy_outright`` (laser/shield power 3) skips the split rules
         entirely. EVERY split and destruction event rolls the level-based
-        powerup drop chance (spec: Powerups).
+        powerup drop chance (spec: Powerups) - and plays its cue, whoever
+        (or whatever) delivered the hit, since the sfx README defines both
+        sounds by the EVENT (a split / a destruction), not the cause.
         """
         if score:
             self._score.record_hit()
         if destroy_outright or asteroid.radius < ASTEROID_MIN_RADIUS_FOR_SPLIT:
             children: list = []
+            self.app.sound.play(SFX_ASTEROID_DESTROYED)
         else:
             children = asteroid.split()
+            self.app.sound.play(SFX_ASTEROID_SPLIT)
         if random.random() < self._powerup_drop_chance():
             self._powerups.append(spawn_drop_powerup(asteroid.x, asteroid.y))
+            self.app.sound.play(SFX_POWERUP_SPAWN)
         return children
 
     def _powerup_drop_chance(self) -> float:
@@ -636,6 +724,9 @@ class GameState(GameModeState):
                 else:
                     self._weapon = make_weapon(powerup.weapon_name,
                                                 power_level=1)
+                # One cue per icon: several pickups in one frame each play
+                # (pygame simply re-fires the channel - acceptable).
+                self.app.sound.play(SFX_POWERUP_COLLECTED)
             else:
                 survivors.append(powerup)
         self._powerups = survivors
@@ -671,10 +762,12 @@ class GameState(GameModeState):
                     asteroid, score=False, destroy_outright=False))
 
     def _destroy_powerup(self, powerup) -> None:
-        """Remove an icon from play regardless of the cause (Stage 7 will
-        add the destroyed-icon SFX here)."""
+        """Remove an icon from play regardless of the cause (projectile,
+        beam, shield, drifting rock, stolen by a UFO). The destruction cue
+        plays once, on the removal that actually happens."""
         try:
             self._powerups.remove(powerup)
+            self.app.sound.play(SFX_POWERUP_DESTROYED)
         except ValueError:
             pass  # already consumed by another collision this frame
 

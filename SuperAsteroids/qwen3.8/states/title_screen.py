@@ -21,6 +21,7 @@ from game_constants import (
     TITLE_SCREEN_START_PROMPT,
     WHITE,
 )
+from sound import SFX_TITLE_SCREEN
 from states.base import GameModeState
 
 
@@ -36,6 +37,10 @@ class TitleScreenState(GameModeState):
             if event.type != pygame.KEYDOWN:
                 continue
             if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                # sfx/README.md: the title-screen sting plays on the
+                # title -> game transition (i.e. starting a NEW game from
+                # the title screen); level advances do not re-play it.
+                self.app.sound.play(SFX_TITLE_SCREEN)
                 self.app.to_game()
             elif event.key == pygame.K_ESCAPE:
                 self.app.quit()  # spec: exit with code 0

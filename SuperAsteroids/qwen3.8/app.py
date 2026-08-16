@@ -1,11 +1,13 @@
 """Application shell for SuperAsteroids.
 
-This module owns the window, the clock, and the state machine. Game mode
-states stay focused on their own behavior and ask the app for transitions,
-so the full state graph lives here in one readable place.
+This module owns the window, the clock, the sound system, and the state
+machine. Game mode states stay focused on their own behavior and ask the
+app for transitions, so the full state graph lives here in one readable
+place.
 
-Window-wide concerns (quit, F11 fullscreen toggle, resize clamping) are
-handled globally in the main loop - they apply identically in every mode.
+Window-wide concerns (quit, F11 fullscreen toggle, resize clamping, F2
+sound toggle) are handled globally in the main loop - they apply identically
+in every mode.
 """
 
 import sys
@@ -16,10 +18,20 @@ import pygame
 
 from game_constants import (
     FPS,
+    FRIENDLY_FIRE_MESSAGE,
     INITIAL_WINDOW_SIZE,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
+    SFX_MIXER_BUFFER,
+    SFX_MIXER_CHANNELS,
+    SFX_SAMPLE_RATE,
+    SFX_SAMPLE_SIZE,
     TEST_MODE_DURATION_SECONDS,
+)
+from sound import (
+    SFX_SHIP_DESTROYED_ASTEROID,
+    SFX_SHIP_DESTROYED_FRIENDLY_FIRE,
+    SoundManager,
 )
 from states import GameModeState, GameOverState, GameState, PauseState, TitleScreenState
 
@@ -27,26 +39,32 @@ from states import GameModeState, GameOverState, GameState, PauseState, TitleScr
 class SuperAsteroidsApp:
     """Owns the display, clock, and current mode, and runs the main loop."""
 
-    def __init__(self, test_mode: bool = False, debug_mode: bool = False):
+    def __init__(self, test_mode: bool = False, debug_mode: bool = False,
+                 sound_on: bool = True):
         self.test_mode = test_mode
         # --debug (spec: "Debug option"): enables cheat hotkeys in Game
         # Mode (C/L/S powerups, U for a UFO).
         self.debug_mode = debug_mode
+        # Mixer config made explicit, pre_init BEFORE pygame.init(). The
+        # values match pygame's defaults and the shipped WAV format (see
+        # game_constants for the rationale).
+        pygame.mixer.pre_init(SFX_SAMPLE_RATE, SFX_SAMPLE_SIZE,
+                              SFX_MIXER_CHANNELS, SFX_MIXER_BUFFER)
         pygame.init()
         self.screen = pygame.display.set_mode(INITIAL_WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption("SuperAsteroids")
         self.clock = pygame.time.Clock()
 
+        # Global sound system (spec: Sound): all effects load into memory
+        # on startup; a per-file load failure is a warning, not a crash.
+        # sound_on=False is what --nosound passes at startup (F2 can still
+        # turn it back on).
+        self._sound = SoundManager(sound_on=sound_on)
+
         self._running = True
         self._state = TitleScreenState(self)
         # The GameState frozen by to_pause(), restored by resume().
         self._paused_state: Optional[GameModeState] = None
-
-        # Global sound state (spec: Sound - one F2 toggle for the whole
-        # app, unaffected by mode). Stage 7 loads the sfx, adds F2, and the
-        # --nosound startup override; until then it simply stays "On" and
-        # the HUD's "Sound:" line reports this value.
-        self._sound_on = True
 
         # F11 state: _is_fullscreen mirrors the real window state, and the
         # windowed geometry is saved on enter so we can restore it exactly on
@@ -68,17 +86,26 @@ class SuperAsteroidsApp:
         return self._state
 
     @property
+    def sound(self) -> SoundManager:
+        return self._sound
+
+    @property
     def sound_on(self) -> bool:
-        return self._sound_on
+        # The HUD's "Sound:" line reads this; the manager is the source of
+        # truth (one global switch, unaffected by mode - spec: Sound).
+        return self._sound.sound_on
 
     def to_title(self) -> None:
         self._paused_state = None
+        self._sound.stop_loops()
         self._state = TitleScreenState(self)
 
     def to_game(self) -> None:
         # Always a NEW game: any paused state is discarded and a fresh
-        # GameState is built (the ship and level state land in Stages 3-4).
+        # GameState is built. The new state's craft is centered and its
+        # spawn timers reset (spec: Timers); no loop can be active yet.
         self._paused_state = None
+        self._sound.stop_loops()
         self._state = GameState(self)
 
     def to_pause(self) -> None:
@@ -89,6 +116,9 @@ class SuperAsteroidsApp:
         # held keys is dropped on EVERY pause path, not just the ESC one.
         self._state.on_pause()
         self._paused_state = self._state
+        # A frozen game makes no sound: the loops stop now and the game
+        # state re-establishes them per-frame on resume.
+        self._sound.stop_loops()
         self._state = PauseState(self)
 
     def resume(self) -> None:
@@ -100,6 +130,14 @@ class SuperAsteroidsApp:
     def to_game_over(self, special_message: str | None = None) -> None:
         # Reached from Game Mode: the craft flying into an asteroid (Stage 3),
         # weapon deaths later (Stages 4-6, with their green special messages).
+        # Death SFX (sfx/README.md): the friendly-fire sound is reserved for
+        # exactly that; EVERY other death (asteroid contact, UFO contact,
+        # hostile fire) uses the generic one.
+        if special_message == FRIENDLY_FIRE_MESSAGE:
+            self._sound.play(SFX_SHIP_DESTROYED_FRIENDLY_FIRE)
+        else:
+            self._sound.play(SFX_SHIP_DESTROYED_ASTEROID)
+        self._sound.stop_loops()
         self._state = GameOverState(self, special_message)
 
     def quit(self) -> None:
@@ -137,6 +175,10 @@ class SuperAsteroidsApp:
                 self._clamp_window_size(event.size)
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
                 self._toggle_fullscreen()
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_F2:
+                # Spec (Sound): F2 toggles sound in ANY mode; the state
+                # persists across modes until toggled again.
+                self._sound.toggle()
         return False
 
     def _clamp_window_size(self, size: tuple) -> None:

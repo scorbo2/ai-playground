@@ -10,6 +10,16 @@ these; later stages will make use of the rest.
 FPS = 60                                       # spec: frame rate locked at 60 FPS
 TEST_MODE_DURATION_SECONDS = 0.250             # --test exits after 250 ms
 
+# ------------------------------------------------------------------ audio
+# Mixer pre_init configuration, applied before pygame.init() so the mixer
+# setup is visible in one place. The values match both the shipped WAV
+# format (44.1 kHz, 16-bit) and pygame's own defaults, so this is
+# documentation of the config rather than a workaround.
+SFX_SAMPLE_RATE = 44100
+SFX_SAMPLE_SIZE = -16                          # signed 16-bit
+SFX_MIXER_CHANNELS = 2    # stereo (1=mono); NOT the number of simultaneous voices
+SFX_MIXER_BUFFER = 512
+
 # -------------------------------------------------------------------- window
 INITIAL_WINDOW_SIZE = (800, 600)
 MIN_WINDOW_WIDTH = 400                         # resizes below this are rejected

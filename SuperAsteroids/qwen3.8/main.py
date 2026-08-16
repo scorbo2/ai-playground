@@ -1,9 +1,6 @@
 """SuperAsteroids - entry point.
 
-Run with:  python3 main.py [--test] [--debug]
-
-``--nosound`` (Stage 7) will be added here as its feature lands in the
-development plan.
+Run with:  python3 main.py [--test] [--debug] [--nosound]
 """
 
 import argparse
@@ -29,12 +26,22 @@ def parse_args(argv=None) -> argparse.Namespace:
         help="enable debug hotkeys in Game Mode: C/L/S spawn a Cannon/Laser/"
                "Shield powerup, U spawns an enemy UFO",
     )
+    parser.add_argument(
+        "--nosound",
+        action="store_true",
+        help="start with sound off; F2 still toggles sound on/off at any time",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    app = SuperAsteroidsApp(test_mode=args.test, debug_mode=args.debug)
+    app = SuperAsteroidsApp(
+        test_mode=args.test,
+        debug_mode=args.debug,
+        # Spec (Sound): sound defaults ON; --nosound starts it off.
+        sound_on=not args.nosound,
+    )
     return app.run()
 
 
