@@ -407,9 +407,9 @@ Unsuccessful attempts do not count as activations:
 
 ## Enemy UFOs
 
-Every 3 minutes of gameplay, spawn an enemy UFO:
+Every 1 minute of gameplay, spawn an enemy UFO:
 
-- horizontal oval shape, 40 px wide, 15 px tall
+- horizontal oval shape, 60 px wide, 35 px tall
 - white outline, light red fill
 - random starting location, never within 200px of player's craft
 - random direction, 2px/frame speed, straight line course
@@ -436,7 +436,7 @@ Every 3 minutes of gameplay, spawn an enemy UFO:
 - Particle velocity 5–15 px/frame, random direction
 - Particle alpha decay 3–10%/frame, random per particle
 
-The three minute UFO timer does NOT reset between levels. For example: if level 1 ends with 10 seconds
+The one minute UFO timer does NOT reset between levels. For example: if level 1 ends with 10 seconds
 remaining until next UFO spawn, then a UFO should spawn 10s after the start of level 2. The timer always
 resets when beginning level 1.
 
@@ -454,7 +454,7 @@ All game objects have simple bounding circles whose size is derived from the gam
   depicted with an irregular shape - the irregular shape is ignored for collision detection purposes).
 - Player craft: a simple 20x radius circle extending from the center of the craft.
 - Cannon projectiles: use the exact shape and size of the projectile for collision detection.
-- Enemy UFOs: a simple 30px radius circle extending from the center of the UFO (ignoring the oval shape).
+- Enemy UFOs: a simple 60px radius circle extending from the center of the UFO (ignoring the oval shape).
 - Powerup icons: a simple bounding circle whose radius matches the icon's radius.
 
 Example: the center of the player's craft comes within 60px of the center of a 40px radius asteroid. This
