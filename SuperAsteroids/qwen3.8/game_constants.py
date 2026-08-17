@@ -181,13 +181,13 @@ POWERUP_DROP_CHANCES = (0.08, 0.06, 0.04, 0.02, 0.01)
 # Per the spec ("Enemy UFOs"): a hostile that drifts in a straight line,
 # deflects periodically, and fires at the craft. Every timer here is counted
 # in frames of ACTIVE play, so pause (and level intros) suspend it for free.
-UFO_OVAL_WIDTH = 40                    # px, the drawn ellipse is 40 wide...
-UFO_OVAL_HEIGHT = 15                   # ...by 15 tall
+UFO_OVAL_WIDTH = 60                    # px, the drawn ellipse is 60 wide...
+UFO_OVAL_HEIGHT = 35                   # ...by 35 tall
 UFO_OUTLINE_WIDTH = 2                  # px, matches the other outlines
-UFO_RADIUS = 30                        # bounding circle (spec: Collision)
+UFO_RADIUS = 60                        # bounding circle (spec: Collision)
 UFO_SPEED = 2                          # px/frame, straight-line drift
 UFO_SPAWN_ATTEMPTS = 50                # random tries for a safe spawn spot
-UFO_INTERVAL = 3 * 60 * 60             # 10800 frames (3 min of active play)
+UFO_INTERVAL = 1 * 60 * 60             # 3600 frames (1 min of active play)
 UFO_MAX_ACTIVE = 3                     # cap; an expired timer at cap just resets
 UFO_DIRECTION_CHANGE_INTERVAL = 300    # frames between random deflections
 UFO_TURN_MAX_DEGREES = 30              # max deflection, random left/right

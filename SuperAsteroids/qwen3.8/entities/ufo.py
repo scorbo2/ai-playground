@@ -1,7 +1,7 @@
 """Enemy UFO: a drifting hostile that fires at the player's craft.
 
 Per the spec (Enemy UFOs):
-  - horizontal oval (40x15 px) with a white outline and light red fill;
+  - horizontal oval (60x35 px) with a white outline and light red fill;
   - straight-line drift at 2 px/frame in a random heading; every
     UFO_DIRECTION_CHANGE_INTERVAL frames the heading deflects by up to
     30 degrees, random left or right; screen wrap on all edges;
