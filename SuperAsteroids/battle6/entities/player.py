@@ -15,6 +15,8 @@ import math
 import pygame
 
 from game_constants import (
+    FUEL_CONSUMPTION_PER_FRAME,
+    FUEL_MAX,
     LIGHT_GRAY,
     PLAYER_ACCELERATION,
     PLAYER_FRICTION,
@@ -44,12 +46,21 @@ class PlayerCraft:
     """The player's craft: rotation, thrust, friction, max speed, screen wrap."""
 
     def __init__(self, x: float, y: float):
-        # All state is assigned by reset(); the constructor just places it.
+        # A freshly constructed craft (a brand-new game) arrives with a full
+        # tank (spec: Game Over / restart - "fuel is restored to max").
+        # Fuel intentionally lives OUTSIDE reset(): level starts must not
+        # refill the tank, they carry it over (spec: Fuel).
+        self.fuel = FUEL_MAX
         self.reset(x, y)
 
     def reset(self, x: float, y: float) -> None:
-        """Default starting state: at (x, y), facing up, velocity 0 (spec:
-        Game Mode / level advancement). Used at new game and level starts."""
+        """Default flight state: at (x, y), facing up, velocity 0 (spec:
+        Game Mode / level advancement). Used at new game and level starts.
+
+        Note: fuel is deliberately NOT reset here. Between levels the tank
+        carries over (plus the level-end bonus); only constructing a new
+        craft - a new game - starts it full.
+        """
         self.x = float(x)
         self.y = float(y)
         self.vx = 0.0
@@ -60,21 +71,36 @@ class PlayerCraft:
     def speed(self) -> float:
         return math.hypot(self.vx, self.vy)
 
-    def update(self, thrusting: bool, turning: int, width: int, height: int) -> None:
-        """Advance one frame.
+    def update(self, thrusting: bool, turning: int, width: int, height: int) -> bool:
+        """Advance one frame. Returns True iff the craft ACTUALLY thrust
+        this frame - thrust requested AND fuel to burn (spec: Fuel). The
+        owning state uses that to gate the exhaust puffs and the thruster
+        sound loop: an empty tank makes no effect.
 
         ``turning`` is -1 (left) / 0 (straight) / +1 (right) - the owning
         state decodes held keys into these intents, so the craft never sees
         raw pygame key codes.
         """
         self._rotate(turning)
-        if thrusting:
+        actually_thrusting = thrusting and self.fuel > 0
+        if actually_thrusting:
             self._thrust()
+            # Consume after the burn: the frame that empties the tank was
+            # still a thrust frame; the NEXT one cannot be (spec: Fuel).
+            self.fuel -= FUEL_CONSUMPTION_PER_FRAME
         else:
+            # Friction applies both when the key is released AND when the
+            # tank is empty (a held key does not count as thrusting then).
             self._apply_friction()
         self.x += self.vx
         self.y += self.vy
         self.x, self.y = wrap_around(self.x, self.y, PLAYER_RADIUS, width, height)
+        return actually_thrusting
+
+    def add_fuel(self, amount: int) -> None:
+        """Top up the tank (fuel pod pickup, level-end bonus), clamped at
+        FUEL_MAX (spec: Fuel - both refuels say "max 600 units")."""
+        self.fuel = min(self.fuel + amount, FUEL_MAX)
 
     def draw(self, screen: pygame.Surface) -> None:
         rad = math.radians(self.angle)

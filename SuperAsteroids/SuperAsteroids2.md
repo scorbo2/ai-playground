@@ -450,7 +450,7 @@ mine collision/immediate detonation. This prevents the mine from exploding as so
 part of the mine's grace period only applies to the player craft. The no-activation part of the grace period applies
 to all game objects.
 
-Asteroids that are destroyed by a mine or by any mine projectile counts as a "hit" for scoring purposes.
+Asteroids that are destroyed or split by a mine or by any mine projectile counts as a "hit" for scoring purposes.
 
 ### Weapon activation
 

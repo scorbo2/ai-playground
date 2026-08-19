@@ -15,6 +15,8 @@ from font_manager import get_font
 from game_constants import (
     CYAN,
     DARK_GRAY,
+    FUEL_BAR_BG,
+    FUEL_BAR_FG,
     GREEN,
     HUD_ALPHA,
     HUD_BORDER_WIDTH,
@@ -37,7 +39,10 @@ class HudData:
 
     ``charge_fraction`` (0..1) and ``charge_color`` select the "Charge:"
     progress-bar line for the charged weapons (Laser light blue, Shield
-    red); the Cannon passes None and shows no bar (spec)."""
+    red); the Cannon passes None and shows no bar (spec).
+
+    ``fuel_fraction`` (0..1) is the "Fuel:" progress-bar line - bright
+    green on dark green, and ALWAYS the last line of the HUD (spec: Fuel)."""
     level: int
     shots_fired: int
     hits: int
@@ -50,6 +55,7 @@ class HudData:
     game_time_seconds: int
     charge_fraction: Optional[float] = None
     charge_color: Optional[tuple] = None
+    fuel_fraction: float = 1.0
 
 
 def _format_game_time(seconds: int) -> str:
@@ -98,37 +104,45 @@ def draw_game_hud(screen: pygame.Surface, data: HudData) -> None:
     )
     available_width = HUD_WIDTH - 2 * HUD_TEXT_PADDING
     has_charge = data.charge_fraction is not None
-    y = (HUD_HEIGHT - (len(text_lines) + (1 if has_charge else 0))
-         * HUD_LINE_SPACING) // 2
+    # Two progress-bar lines exist: the optional "Charge:" bar (its own slot
+    # right below "Power:") and the "Fuel:" bar, which is ALWAYS the last
+    # line of the HUD (spec: Fuel). Both slots are pre-counted into the y
+    # start below so the text stays vertically centered either way.
+    bar_lines = (1 if has_charge else 0) + 1
+    y = (HUD_HEIGHT - (len(text_lines) + bar_lines) * HUD_LINE_SPACING) // 2
     for index, (text, color) in enumerate(text_lines):
         surface.blit(_fit_render(text, color, available_width),
                      (HUD_TEXT_PADDING, y))
         y += HUD_LINE_SPACING
         # Spec HUD line order: the charge bar gets its OWN line slot,
-        # right below "Power:". (The extra slot is already accounted for
-        # in the y starting position above.)
+        # right below "Power:".
         if index == _CHARGE_BAR_AFTER_LINE and has_charge:
-            _draw_charge_bar(surface, y, data.charge_fraction,
-                             data.charge_color, available_width)
+            _draw_progress_line(surface, y, "Charge:", data.charge_fraction,
+                                data.charge_color, DARK_GRAY, available_width)
             y += HUD_LINE_SPACING
+    # The fuel line is ALWAYS last (spec: Fuel), after the game time line.
+    _draw_progress_line(surface, y, "Fuel:", data.fuel_fraction,
+                        FUEL_BAR_FG, FUEL_BAR_BG, available_width)
 
     surface.set_alpha(HUD_ALPHA)
     screen.blit(surface, rect.topleft)
 
 
-def _draw_charge_bar(surface: pygame.Surface, y: int, fraction: float,
-                     color, available_width: int) -> None:
-    """The 'Charge:' line for charged weapons (spec: Laser/Shield): white
-    label over a progress bar, bar fill in the weapon's color on dark gray."""
-    label = _fit_render("Charge:", WHITE, available_width)
-    surface.blit(label, (HUD_TEXT_PADDING, y))
-    bar_x = HUD_TEXT_PADDING + label.get_width() + 4
-    bar_width = max(10, available_width - label.get_width() - 4)
+def _draw_progress_line(surface: pygame.Surface, y: int, label: str,
+                        fraction: float, fill_color, background_color,
+                        available_width: int) -> None:
+    """One progress-bar line (the HUD's "Charge:" and "Fuel:" lines): white
+    label on the left, a bar filled with ``fill_color`` on ``background_color``
+    to its right (spec: Laser/Shield/Fuel)."""
+    label_surface = _fit_render(label, WHITE, available_width)
+    surface.blit(label_surface, (HUD_TEXT_PADDING, y))
+    bar_x = HUD_TEXT_PADDING + label_surface.get_width() + 4
+    bar_width = max(10, available_width - label_surface.get_width() - 4)
     bar_y = y + (HUD_LINE_SPACING - HUD_CHARGE_BAR_HEIGHT) // 2
     outer = pygame.Rect(bar_x, bar_y, bar_width, HUD_CHARGE_BAR_HEIGHT)
-    pygame.draw.rect(surface, DARK_GRAY, outer)
+    pygame.draw.rect(surface, background_color, outer)
     fill_width = int(round((outer.width - 2) * max(0.0, min(1.0, fraction))))
     if fill_width > 0:
-        pygame.draw.rect(surface, color,
+        pygame.draw.rect(surface, fill_color,
                          (outer.x + 1, outer.y + 1, fill_width,
                           outer.height - 2))

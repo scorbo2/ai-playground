@@ -35,33 +35,52 @@ at each level. The mine "scanning" pulse plays as a one-shot every
 120 frames per unactivated mine (NOT a continuous loop); mine arm/detonate
 one-shots fire on those events.
 
+Stage 10 (fuel): the craft carries a fuel tank - FUEL_MAX on a brand-new
+game, one unit per frame it ACTUALLY thrusts, and at 0 it cannot thrust at
+all (no acceleration, no exhaust puffs, no thruster sound; rotation and
+weapons keep working). Every asteroid split/destruction event rolls an
+independent FUEL_POD_DROP_CHANCE to release a fuel pod at the event; the
+pod drifts and wraps exactly like a powerup icon (shared speed/grace) and
+shares the icon's ENTIRE collision matrix - projectiles, laser, and shield
+destroy it out of grace, drifting into an asteroid splits/destroys the rock,
+a UFO steals it even during grace - with one difference: picking one up
+adds FUEL_POD_PICKUP to the tank (max FUEL_MAX) instead of upgrading a
+weapon. Pods leave play at level end with everything else, and the tank
+receives a level-end bonus (it CARRIES OVER; level starts never refill it).
+Pod SFX reuse the powerup ones: sfx/README defines the spawn/destroy/collect
+cues for "a powerup icon or fuel pod".
+
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
 During it - and while paused - the field is drawn frozen, the craft is
 hidden, no controls work, and no timers (spawn or game time) advance.
 
 Frame order in the playing phase (matters for edge cases):
-  1. movement: craft (emits thruster exhaust while thrusting), asteroids,
-     player projectiles, UFOs (drift plus their cadence shots), UFO
-     projectiles, powerup drift, mine drift, mine projectile drift,
-     then the cosmetic particle field advances and its faded members
-     are pruned
+  1. movement: craft (emits thruster exhaust while it ACTUALLY thrusts -
+     an empty fuel tank makes no exhaust), asteroids, player projectiles,
+     UFOs (drift plus their cadence shots), UFO projectiles, powerup drift,
+     fuel pod drift, mine drift, mine projectile drift, then the cosmetic
+     particle field advances and its faded members are pruned
   2. spawn timers (powerup, then UFO), then weapon charge drain/recharge
   3. player weapons vs. the world (projectiles, laser beam, shield ram) -
-     this is also where UFOs get destroyed by player weapons, and where
+     this is also where UFOs get destroyed by player weapons, where
+     powerup icons and fuel pods are destroyed out of grace, and where
      player projectiles/laser/shield detonate mines on contact
   4. mine interactions: contact detonations (UFO, craft, projectile,
      asteroid), proximity activation (150px, latching), fuse expiry
-  5. mine burst projectiles vs. the world (asteroid score, powerup,
-     UFO, other mine detonation, craft friendly fire)
+  5. mine burst projectiles vs. the world (asteroid score, powerup/fuel
+     pod, UFO, other mine detonation, craft friendly fire)
   6. UFO projectiles vs. the world (asteroids without score, powerup
-     icons, mines, the craft -> game over "HOSTILE FIRE!" unless shielded)
+     icons/fuel pods, mines, the craft -> game over "HOSTILE FIRE!"
+     unless shielded)
   7. craft death check (fatal asteroid or UFO contact)
-  8. powerup collection (any time, even during the icon's grace)
-  9. drifting powerups vs. asteroids (out of grace only, no score)
-  10. UFOs vs. powerups (steals - work even during the icon's grace)
-  11. level advancement when the field is clear (UFOs, mines, and their
-      projectiles leave play; the UFO spawn timer PERSISTS)
+  8. drop collection: powerup icons (weapon upgrade) and fuel pods
+     (+FUEL_POD_PICKUP, max FUEL_MAX) - any time, even during grace
+  9. drifting powerups and fuel pods vs. asteroids (out of grace only,
+     no score)
+  10. UFOs vs. powerups and fuel pods (steals - work even during grace)
+  11. level advancement when the field is clear (UFOs, mines, their
+      projectiles, and fuel pods leave play; the UFO spawn timer PERSISTS)
 """
 
 import math
@@ -70,7 +89,8 @@ import random
 import pygame
 
 from entities import (CannonProjectile, PlayerCraft, player_hits_asteroid,
-                      player_hits_ufo, spawn_level_asteroids, spawn_ufo)
+                      player_hits_ufo, spawn_fuel_pod,
+                      spawn_level_asteroids, spawn_ufo)
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
 from effects.particles import (spawn_destruction_explosion,
@@ -84,6 +104,10 @@ from game_constants import (
     DEBUG_SPAWN_ATTEMPTS,
     FPS,
     FRIENDLY_FIRE_MESSAGE,
+    FUEL_LEVEL_END_BONUS,
+    FUEL_MAX,
+    FUEL_POD_DROP_CHANCE,
+    FUEL_POD_PICKUP,
     HEADING_FONT_SIZE,
     HOSTILE_FIRE_MESSAGE,
     LASER_SAMPLE_STEP,
@@ -151,6 +175,10 @@ class GameState(GameModeState):
         self._mines: list = []
         self._mine_projectiles: list = []
         self._powerups: list = []
+        # Fuel pods (spec: Fuel): they share the powerup icons' drift,
+        # grace, and collision matrix, so they ride in a parallel list and
+        # the collision passes below iterate both (see ``_drops``).
+        self._fuel_pods: list = []
         self._ufos: list = []
         # Cosmetic-only particles (explosion debris, thruster puffs). They
         # have no collision role, so they are a simple last-in list and get
@@ -201,11 +229,16 @@ class GameState(GameModeState):
         self._asteroid_count += random.randint(*LEVEL_ASTEROID_COUNT_INCREMENT)
         width, height = self.app.screen.get_size()
         self._craft.reset(width // 2, height // 2)
+        # Level-end refuel (spec: Fuel): +FUEL_LEVEL_END_BONUS on top of
+        # whatever the tank already has, clamped at FUEL_MAX. (reset() does
+        # NOT refill the tank - the fuel has to carry over between levels.)
+        self._craft.add_fuel(FUEL_LEVEL_END_BONUS)
         self._projectiles = []
         self._ufo_projectiles = []
         self._mines = []
         self._mine_projectiles = []
         self._powerups = []
+        self._fuel_pods = []
         self._ufos = []
         # Cosmetic debris of the level just left behind dies with it
         # (spec: "all explosion particles, powerup icons, thruster exhaust
@@ -350,9 +383,12 @@ class GameState(GameModeState):
         # (the spec's "forced screen wrap" requirement).
         width, height = self.app.screen.get_size()
         thrusting, turning = self._craft_intents()
-        self._craft.update(thrusting, turning, width, height)
-        self._sync_sound_loops(thrusting)
-        if thrusting:
+        # The craft reports whether it ACTUALLY thrust (a held key with an
+        # empty tank does not count, spec: Fuel); that gates both the
+        # exhaust puffs and the thruster sound loop.
+        thrust_applied = self._craft.update(thrusting, turning, width, height)
+        self._sync_sound_loops(thrust_applied)
+        if thrust_applied:
             # Thruster exhaust (spec: Thrusters): every thrusting frame
             # ejects a random 2-3 puffs. After the craft's motion for this
             # frame, so puffs are emitted from where the ship IS - the
@@ -374,6 +410,8 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y, width, height))
         for powerup in self._powerups:
             powerup.update(width, height)
+        for pod in self._fuel_pods:
+            pod.update(width, height)
         for mine in self._mines:
             mine.update(width, height)
         # The "scanning" pulse is a one-shot every 120 frames per mine
@@ -405,9 +443,9 @@ class GameState(GameModeState):
             return  # hostile fire already took us to Game Over
         if self._resolve_craft_deaths(width, height):
             return
-        self._collect_powerups(width, height)
-        self._resolve_powerup_asteroid_hits(width, height)
-        self._resolve_ufo_powerup_steals(width, height)
+        self._collect_drops(width, height)
+        self._resolve_drop_asteroid_hits(width, height)
+        self._resolve_ufo_drop_steals(width, height)
         if not self._asteroids:
             self._advance_level()
 
@@ -495,17 +533,18 @@ class GameState(GameModeState):
                     asteroid, score=True, destroy_outright=False,
                     impact_point=(projectile.x, projectile.y)))
                 continue
-            powerup = next(
-                (p for p in self._powerups
+            drop = next(
+                (p for p in self._drops
                  if not p.in_grace
                  and projectile.hits_circle(p.x, p.y, p.radius,
                                             width, height)),
                 None,
             )
-            if powerup is not None:
-                # The projectile consumes the icon (spec: Cannon). No shot
-                # or hit is recorded - an impact, not an activation.
-                self._destroy_powerup(powerup)
+            if drop is not None:
+                # The projectile consumes the icon or fuel pod (spec:
+                # Cannon / Fuel - pods share the icon's rules). No shot or
+                # hit is recorded - an impact, not an activation.
+                self._destroy_drop(drop)
                 continue
             ufo = next(
                 (u for u in self._ufos
@@ -576,15 +615,18 @@ class GameState(GameModeState):
                     impact_point=(sx, sy)))
                 weapon.deactivate_after_hit()
                 return
-            powerup = next(
-                (p for p in self._powerups
+            drop = next(
+                (p for p in self._drops
                  if not p.in_grace
                  and torus_distance(sx, sy, p.x, p.y, width, height)
                  <= p.radius),
                 None,
             )
-            if powerup is not None:
-                self._destroy_powerup(powerup)
+            if drop is not None:
+                # A fuel pod is a game object to the beam, just like an
+                # icon: destroyed, and the beam is spent by the hit
+                # (spec: Laser / Fuel).
+                self._destroy_drop(drop)
                 weapon.deactivate_after_hit()
                 return
             mine = next(
@@ -616,8 +658,9 @@ class GameState(GameModeState):
 
     def _resolve_shield_hits(self, width: int, height: int) -> None:
         """The ring rams asteroids and UFOs (destroy + bounce) and shreds
-        out-of-grace powerup icons. Unlike the laser, it stays ACTIVE
-        after impacts until its charge runs out (spec: Ramming Shield)."""
+        out-of-grace powerup icons and fuel pods. Unlike the laser, it
+        stays ACTIVE after impacts until its charge runs out (spec:
+        Ramming Shield / Fuel)."""
         weapon = self._weapon
         if not isinstance(weapon, RammingShield) or not weapon.firing:
             return
@@ -628,23 +671,32 @@ class GameState(GameModeState):
         if not self._shield_rams_asteroid(weapon, width, height):
             if not self._shield_rams_mine(weapon, width, height):
                 self._shield_rams_ufo(weapon, width, height)
-        # Icons touching the ring outside their grace period are destroyed
-        # - through _destroy_powerup so they get the same destruction cue
-        # as every other destroy path (spec: "by any means"). In-grace
-        # icons are untouched: the craft may still collect them in
-        # _collect_powerups() while the shield is raised. An explicit loop
-        # rather than a comprehension filter: _destroy_powerup mutates
-        # self._powerups (via .remove), which the loop must not race.
+        # Icons/pods touching the ring outside their grace period are
+        # destroyed - through _destroy_drop so they get the same
+        # destruction cue as every other destroy path (spec: "by any
+        # means"). In-grace drops are untouched: the craft may still
+        # collect them in _collect_drops() while the shield is raised.
+        self._powerups = self._survive_shield_ring(
+            weapon, self._powerups, width, height)
+        self._fuel_pods = self._survive_shield_ring(
+            weapon, self._fuel_pods, width, height)
+
+    def _survive_shield_ring(self, weapon: RammingShield, drops: list,
+                             width: int, height: int) -> list:
+        """The drops (powerup icons and/or fuel pods) the raised ring did
+        NOT shred this frame. An explicit loop rather than a comprehension
+        filter: _destroy_drop mutates the list backing each drop, which
+        the loop must not race."""
         survivors = []
-        for powerup in self._powerups:
-            if (not powerup.in_grace
-                    and powerup.overlaps_circle(
+        for drop in drops:
+            if (not drop.in_grace
+                    and drop.overlaps_circle(
                         self._craft.x, self._craft.y, weapon.shield_radius,
                         width, height)):
-                self._destroy_powerup(powerup)
+                self._destroy_drop(drop)
             else:
-                survivors.append(powerup)
-        self._powerups = survivors
+                survivors.append(drop)
+        return survivors
 
     def _shield_rams_asteroid(self, weapon: RammingShield,
                               width: int, height: int) -> bool:
@@ -909,15 +961,17 @@ class GameState(GameModeState):
                     asteroid, score=True, destroy_outright=False,
                     impact_point=(projectile.x, projectile.y)))
                 continue
-            powerup = next(
-                (p for p in self._powerups
+            drop = next(
+                (p for p in self._drops
                  if not p.in_grace
                  and projectile.hits_circle(p.x, p.y, p.radius,
                                             width, height)),
                 None,
             )
-            if powerup is not None:
-                self._destroy_powerup(powerup)
+            if drop is not None:
+                # Burst shots shred icons and fuel pods exactly as player
+                # projectiles do (spec: Fuel - same rules as icons).
+                self._destroy_drop(drop)
                 continue
             ufo = next(
                 (u for u in self._ufos
@@ -986,15 +1040,15 @@ class GameState(GameModeState):
                     asteroid, score=False, destroy_outright=False,
                     impact_point=(projectile.x, projectile.y)))
                 continue
-            powerup = next(
-                (p for p in self._powerups
+            drop = next(
+                (p for p in self._drops
                  if not p.in_grace
                  and projectile.hits_circle(p.x, p.y, p.radius,
                                              width, height)),
                 None,
             )
-            if powerup is not None:
-                self._destroy_powerup(powerup)
+            if drop is not None:
+                self._destroy_drop(drop)
                 continue
             mine = next(
                 (m for m in self._mines
@@ -1034,18 +1088,20 @@ class GameState(GameModeState):
         except ValueError:
             pass  # already shredded by another hit this frame
 
-    def _resolve_ufo_powerup_steals(self, width: int, height: int) -> None:
-        """A UFO "steals" a powerup on contact: the icon is removed from
-        play, the UFO is UNaffected (no split, no damage, no bounce), and
-        - unlike every other destroyer in the game - this works even
-        during the icon's grace period (spec: Enemy UFOs)."""
+    def _resolve_ufo_drop_steals(self, width: int, height: int) -> None:
+        """A UFO "steals" a powerup icon or fuel pod on contact: the drop
+        is removed from play, the UFO is UNaffected (no split, no damage,
+        no bounce), and - unlike every other destroyer in the game - this
+        works even during the drop's grace period (spec: Enemy UFOs /
+        Fuel - pods share the icons' rules)."""
         for ufo in self._ufos:
-            # Snapshot: _destroy_powerup mutates self._powerups.
-            for powerup in list(self._powerups):
-                if (torus_distance(ufo.x, ufo.y, powerup.x, powerup.y,
+            # _drops is a fresh concatenation, so _destroy_drop mutating
+            # either backing list is safe mid-iteration.
+            for drop in self._drops:
+                if (torus_distance(ufo.x, ufo.y, drop.x, drop.y,
                                    width, height)
-                        <= ufo.radius + powerup.radius):
-                    self._destroy_powerup(powerup)
+                        <= ufo.radius + drop.radius):
+                    self._destroy_drop(drop)
 
     # ------------------------------------------------------- asteroid impacts
 
@@ -1063,9 +1119,10 @@ class GameState(GameModeState):
         drop, if the roll succeeds, still spawns at the rock's own
         position: the rock "has" it, whatever touched it.) EVERY split and
         destruction event rolls the level-based powerup drop chance
-        (spec: Powerups) - and plays its cue, whoever (or whatever)
-        delivered the hit, since the sfx README defines both sounds by the
-        EVENT (a split / a destruction), not the cause.
+        (spec: Powerups) AND the flat fuel pod drop chance (spec: Fuel) -
+        and plays the spawn cue, whoever (or whatever) delivered the hit,
+        since the sfx README defines those sounds by the EVENT (a spawn /
+        a split / a destruction), not the cause.
         """
         if score:
             self._score.record_hit()
@@ -1083,6 +1140,12 @@ class GameState(GameModeState):
                 impact_point[0], impact_point[1], asteroid.radius))
         if random.random() < self._powerup_drop_chance():
             self._powerups.append(spawn_drop_powerup(asteroid.x, asteroid.y))
+            self.app.sound.play(SFX_POWERUP_SPAWN)
+        if random.random() < FUEL_POD_DROP_CHANCE:
+            # Independent of the powerup roll: a single event CAN release
+            # both (spec: Fuel - its own 2% on every event). The spawn cue
+            # covers pods too (sfx/README: "powerup icon or fuel pod").
+            self._fuel_pods.append(spawn_fuel_pod(asteroid.x, asteroid.y))
             self.app.sound.play(SFX_POWERUP_SPAWN)
         return children
 
@@ -1119,12 +1182,15 @@ class GameState(GameModeState):
 
     # -------------------------------------------------------------- powerups
 
-    def _collect_powerups(self, width: int, height: int) -> None:
-        """The craft may collect icons ANY time - even during their grace
-        period (spec). Same type: power +1 (max 3). Different type: switch
-        at power 1. Icons have no cap, so several can be collected in one
-        frame (the last one's effect wins, like any rapid pickup)."""
-        survivors = []
+    def _collect_drops(self, width: int, height: int) -> None:
+        """The craft may collect powerup icons AND fuel pods ANY time -
+        even during their grace period (spec: Powerups / Fuel). Icons
+        upgrade the weapon (same type: power +1, max 3; different type:
+        switch at power 1). Pods add FUEL_POD_PICKUP to the tank (capped
+        at FUEL_MAX). Neither kind has a cap, so several can be collected
+        in one frame (the last one's effect wins, like any rapid pickup;
+        the cue plays per pickup - pygame simply re-fires the channel)."""
+        powerup_survivors = []
         for powerup in self._powerups:
             if powerup.overlaps_circle(self._craft.x, self._craft.y,
                                        PLAYER_RADIUS, width, height):
@@ -1135,35 +1201,45 @@ class GameState(GameModeState):
                 else:
                     self._weapon = make_weapon(powerup.weapon_name,
                                                 power_level=1)
-                # One cue per icon: several pickups in one frame each play
-                # (pygame simply re-fires the channel - acceptable).
                 self.app.sound.play(SFX_POWERUP_COLLECTED)
             else:
-                survivors.append(powerup)
-        self._powerups = survivors
+                powerup_survivors.append(powerup)
+        self._powerups = powerup_survivors
+        pod_survivors = []
+        for pod in self._fuel_pods:
+            if pod.overlaps_circle(self._craft.x, self._craft.y,
+                                   PLAYER_RADIUS, width, height):
+                # sfx/README: the pickup cue covers fuel pods too.
+                self._craft.add_fuel(FUEL_POD_PICKUP)
+                self.app.sound.play(SFX_POWERUP_COLLECTED)
+            else:
+                pod_survivors.append(pod)
+        self._fuel_pods = pod_survivors
 
-    def _resolve_powerup_asteroid_hits(self, width: int, height: int) -> None:
-        """A drifting out-of-grace icon touching an asteroid is destroyed,
-        and the asteroid splits/destroys per the normal impact rules -
-        without scoring the player (spec: Powerups / Scoring). Each icon
-        and rock is consumed at most once per frame."""
-        consumed_icons: set = set()
-        # Rock id -> the icon position that hit it (the debris origin).
+    def _resolve_drop_asteroid_hits(self, width: int, height: int) -> None:
+        """A drifting out-of-grace icon or fuel pod touching an asteroid is
+        destroyed, and the asteroid splits/destroys per the normal impact
+        rules - without scoring the player (spec: Powerups / Fuel /
+        Scoring). Each drop and rock is consumed at most once per frame."""
+        consumed_drops: set = set()
+        # Rock id -> the drop position that hit it (the debris origin).
         impacted_rocks: dict = {}
-        for powerup in self._powerups:
-            if powerup.in_grace:
+        for drop in self._drops:
+            if drop.in_grace:
                 continue
             for asteroid in self._asteroids:
                 if id(asteroid) in impacted_rocks:
                     continue
-                if powerup.overlaps_circle(asteroid.x, asteroid.y,
-                                           asteroid.radius, width, height):
-                    consumed_icons.add(id(powerup))
-                    impacted_rocks[id(asteroid)] = (powerup.x, powerup.y)
-                    break  # one rock per icon per frame
-        for powerup in self._powerups:
-            if id(powerup) in consumed_icons:
-                self._destroy_powerup(powerup)
+                if drop.overlaps_circle(asteroid.x, asteroid.y,
+                                        asteroid.radius, width, height):
+                    consumed_drops.add(id(drop))
+                    impacted_rocks[id(asteroid)] = (drop.x, drop.y)
+                    break  # one rock per drop per frame
+        # A second FRESH snapshot: _destroy_drop mutates the backing
+        # lists, and the first concatenation is stale by now.
+        for drop in self._drops:
+            if id(drop) in consumed_drops:
+                self._destroy_drop(drop)
         # Iterate a SNAPSHOT: the loop body rebuilds self._asteroids, and
         # removing elements from a list mid-iteration would skip the rock
         # sitting right after each removed one.
@@ -1174,15 +1250,31 @@ class GameState(GameModeState):
                     asteroid, score=False, destroy_outright=False,
                     impact_point=impacted_rocks[id(asteroid)]))
 
-    def _destroy_powerup(self, powerup) -> None:
-        """Remove an icon from play regardless of the cause (projectile,
-        beam, shield, drifting rock, stolen by a UFO). The destruction cue
-        plays once, on the removal that actually happens."""
+    def _destroy_drop(self, drop) -> None:
+        """Remove a powerup icon or fuel pod from play regardless of the
+        cause (projectile, beam, shield, drifting rock, stolen by a UFO).
+        The destruction cue (sfx/README: covers both kinds) plays once, on
+        the removal that actually happens."""
         try:
-            self._powerups.remove(powerup)
+            self._powerups.remove(drop)
+            self.app.sound.play(SFX_POWERUP_DESTROYED)
+        except ValueError:
+            pass  # not an icon - check the pod list below
+        try:
+            self._fuel_pods.remove(drop)
             self.app.sound.play(SFX_POWERUP_DESTROYED)
         except ValueError:
             pass  # already consumed by another collision this frame
+
+    @property
+    def _drops(self) -> list:
+        """Every drifting drop (powerup icons + fuel pods) as ONE fresh
+        concatenation. The two kinds share drift, grace, and the whole
+        collision matrix (spec: Fuel), so the collision passes iterate this
+        view. It documents, rather than owns, the data: mutations always
+        go through the backing lists (_destroy_drop/_collect_drops/
+        _advance_level), never through this list."""
+        return self._powerups + self._fuel_pods
 
     # ----------------------------------------------------------------- view
 
@@ -1206,6 +1298,8 @@ class GameState(GameModeState):
         if self._phase == self.PHASE_PLAYING:
             for powerup in self._powerups:
                 powerup.draw(screen)
+            for pod in self._fuel_pods:
+                pod.draw(screen)
             for ufo in self._ufos:
                 ufo.draw(screen)
             for projectile in self._projectiles:
@@ -1253,6 +1347,9 @@ class GameState(GameModeState):
             game_time_seconds=self._game_time_frames // FPS,
             charge_fraction=charge_fraction,
             charge_color=charge_color,
+            # The HUD owns the /FUEL_MAX scaling (spec: Fuel); the tank
+            # itself only ever deals in integer units.
+            fuel_fraction=self._craft.fuel / FUEL_MAX,
         )
 
     def _draw_level_intro(self, screen: pygame.Surface) -> None:

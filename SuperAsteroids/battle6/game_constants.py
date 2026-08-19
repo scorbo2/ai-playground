@@ -40,6 +40,10 @@ DARK_GRAY = (64, 64, 64)
 GRAY = (128, 128, 128)
 ASTEROID_MIN_FILL = 72                         # 72,72,72  (random asteroid fills)
 ASTEROID_MAX_FILL = 152                        # 152,152,152
+FUEL_BAR_FG = (0, 255, 0)                      # bright green (same value as
+                                               # GREEN; named per the spec's
+                                               # suggested constants)
+FUEL_BAR_BG = (0, 64, 0)                       # dark green
 
 # --------------------------------------------------------------------- fonts
 # Pixel sizes for pygame's built-in font.
@@ -225,6 +229,35 @@ POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
 # level; level 5+ clamps to the last entry (1%).
 POWERUP_DROP_CHANCES = (0.08, 0.06, 0.04, 0.02, 0.01)
 
+# --------------------------------------------------------------------- fuel
+# The craft's tank (spec: "Fuel"): fresh games start full; one unit is
+# consumed per frame the craft ACTUALLY thrusts; at 0 the craft cannot
+# thrust at all (no acceleration, no exhaust puffs, no thruster sound -
+# rotation and weapons keep working). Between levels the tank CARRIES OVER
+# and receives a flat bonus; a brand-new game constructs a fresh craft,
+# which is what "restores" it to max - level starts must NOT refill it.
+FUEL_MAX = 600                             # units, a fresh game's tank
+FUEL_CONSUMPTION_PER_FRAME = 1             # per thrusting frame
+FUEL_LEVEL_END_BONUS = 120                 # added on every level advance (clamped)
+FUEL_POD_PICKUP = 60                       # added per pod collected (clamped)
+# Independent per-event roll, applied to EVERY asteroid split or
+# destruction event, whatever delivered the hit (spec: Fuel).
+FUEL_POD_DROP_CHANCE = 0.02
+# The pod itself (spec: Fuel): a rounded 20 px square drawn with a white
+# border and a self-oscillating green fill. It drifts, wraps, and collides
+# EXACTLY like a powerup icon, so the speed/grace constants are the shared
+# powerup ones (POWERUP_SPEED, POWERUP_GRACE).
+FUEL_POD_SIZE = 20                         # px, the drawn square
+FUEL_POD_CORNER_RADIUS = 6
+FUEL_POD_BORDER_WIDTH = 4                  # white border
+# Bounding circle for ALL collision checks (spec: "Collision detection" -
+# 12 px from the pod's center, regardless of the drawn square).
+FUEL_POD_RADIUS = 12
+# Fill color ping-pongs 0,128,0 -> 0,255,0 -> 0,128,0 ... at one green
+# channel unit per frame (spec: Fuel).
+FUEL_POD_GREEN_MIN = 128
+FUEL_POD_GREEN_MAX = 255
+
 # --------------------------------------------------------------------- UFO
 # Per the spec ("Enemy UFOs"): a hostile that drifts in a straight line,
 # deflects periodically, and fires at the craft. Every timer here is counted
@@ -293,7 +326,8 @@ THRUSTER_COLORS = (YELLOW, ORANGE, RED)      # one, random per puff
 # Upper-right HUD (spec: "Heads-up display"). Everything is drawn at a single
 # ~60% opacity (alpha 153) on a transparent surface.
 HUD_WIDTH = 200
-HUD_HEIGHT = 200
+HUD_HEIGHT = 220                        # spec value; the Stage 10 fuel line
+                                        # (always the LAST line) needs it
 HUD_MARGIN = 10
 HUD_CORNER_RADIUS = 12
 HUD_BORDER_WIDTH = 4
