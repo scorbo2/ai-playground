@@ -59,9 +59,9 @@ After the text fade out is complete, the player's ship appears in the center of 
 begin to move, player controls are enabled, and the game begins.
 
 On each level advancement, all explosion particles, powerup icons, thruster exhaust circles, projectiles, 
-mines, and enemy UFOs are removed from play. The player's craft is returned to the center of the screen facing up,
-with velocity reset to 0. If the laser or shield were active at the end of the previous level, they are
-deactivated. Their charge is restored to 100%.
+mines, fuel pods, and enemy UFOs are removed from play. The player's craft is returned to the center of
+the screen facing up, with velocity reset to 0. If the laser or shield were active at the end of the
+previous level, they are deactivated. Their charge is restored to 100%.
 
 #### Ship physics and controls
 
@@ -163,7 +163,7 @@ display the additional message between "GAME OVER" and "Press ESC to exit".
 The additional message should be in green text.
 
 Pressing `r` returns to level 1 and begins a new game. The player craft returns to its default starting state,
-losing any weapons upgrades that the player had collected.
+losing any weapons upgrades that the player had collected. Fuel is restored to max.
 
 Pressing `ESC` in Game Over mode returns to Title Screen Mode.
 
@@ -190,12 +190,13 @@ The HUD has a rounded cyan border with width 4 pixels. The HUD displays the foll
 - Game time (label "Game time:"). Elapsed game time in minutes:seconds. This reflects active game time,
   not elapsed wall-clock time. Time spent in Pause Mode and time spent between levels does not count towards this.
   Green text.
+- Fuel gauge (label "Fuel:"). See Fuel section for details of fuel display.
 
 The HUD is ONLY displayed in Game Mode. In Pause Mode, Game Over Mode, and Title Screen Mode, the HUD is hidden.
 
 HUD characteristics:
 
-- size: 200px wide, 200px tall
+- size: 200px wide, 220px tall
 - position: upper right, 10px margin from screen edge
 - corner radius: 12
 - border color: cyan
@@ -464,6 +465,35 @@ Unsuccessful attempts do not count as activations:
 - Shield: attempted activation blocked by insufficient charge
 - Mine: blocked by mine cap.
 
+## Fuel
+
+The player craft starts with 600 units of fuel. Fuel is consumed at a rate of 1 unit per frame
+for every frame where the craft is thrusting. Current fuel status is shown in the HUD
+on a line with label "Fuel:" and a bar similar to the charge bars shown for the ramming
+shield and the laser. The fuel bar has a bright green foreground indicating current level,
+on a dark green background. The fuel label should be shown in white text. The fuel line
+is always the last line in the HUD.
+
+If the current fuel level reaches 0, the player craft can no longer thrust. Rotation and weapons
+controls remain operational.
+
+Every asteroid split and destruction event has a 2% chance of releasing a fuel pod at the position
+of the split or destruction event. Fuel pods are shown as 20px squares with rounded corners (6px corner radius). 
+They have a white 4px border and a green fill. The fill color starts at 0,128,0 and increases 
+to 0,255,0 (increase green channel by 1 every frame), then reduce back to 0,128,0 at the same rate, before 
+repeating the cycle of color change. Fuel pods follow the same lifecycle rules as powerup icons: 
+they start with a speed of 2px/frame in a random direction, have the same 90  frame grace period, 
+and the same collision rules with other game objects. Fuel pods can be "stolen" upon collision 
+with an enemy UFO - in that case, the fuel pod is simply removed from play, and the 
+UFO is unaffected. Collision with the player craft removes the fuel pod from play and adds 60 units
+of fuel to the player craft (max 600 units). Collision with any other
+game object removes the fuel pod from play. This DOES cause asteroid split or destruction events, 
+exactly as with powerup icons.
+
+Fuel pods respect screen wrapping on all edges.
+
+At the end of each level, the player's current fuel level is increased by 120 units (max 600).
+
 ## Enemy UFOs
 
 Every 1 minute of gameplay, spawn an enemy UFO:
@@ -475,7 +505,7 @@ Every 1 minute of gameplay, spawn an enemy UFO:
 - changes direction by up to 30 degrees randomly left/right every 300 frames
 - UFOs respect screen wrapping on all screen edges.
 - no collision detection with asteroids (passes through them)
-- can "steal" powerups by destroying them on contact, even within their grace period
+- can "steal" powerups and fuel pods by destroying them on contact, even within their grace period
 - every 120 frames, fire a level 1 cannon projectile in the direction of player's ship.
 - UFO cannon projectiles have the same visual characteristic's as player's level 1 cannon projectiles, but half
   the travel distance (expire after 500px cumulative travel distance).
@@ -519,6 +549,7 @@ All game objects have simple bounding circles whose size is derived from the gam
 - Mines: have a collision radius based on their drawn radius. Contact with any game object triggers immediate
   explosion. Also have an invisible "activation radius" with a fixed 150px value. Any game object entering that
   radius activates the mine. The 150px activation radius respects screen wrapping.
+- Fuel pods: a simple bounding circle with radius of 12px from the center of the fuel pod.
 
 Example: the center of the player's craft comes within 60px of the center of a 40px radius asteroid. This
 counts as a collision, because the craft's 20px bounding circle now intersects the asteroids 40px bounding circle.
@@ -560,6 +591,8 @@ removed from play. This simulates thruster exhaust.
 
 Thruster exhaust circles do not have collision detection with any other game object. The thruster effect is a
 purely cosmetic visual effect.
+
+Attempting to thrust when the craft has no fuel does not produce any thruster visual effects.
 
 ## Starfield background
 
@@ -678,7 +711,10 @@ If `--debug` is not specified, these keys do nothing.
   particle explosions can be implemented now. There should be no changes needed to collision
   detection in this stage.
 - Stage 9: implement shrapnel mines. Implement mine activation and detonation rules. Add shrapnel
-  mine powerup icons and mine upgrades.
+  mine powerup icons and mine upgrades. Implement audio events in `sfx/README.md` related to mines.
+- Stage 10: implement fuel consumption, fuel pods, and changes to the HUD (increase height if
+  needed to the new spec value of 220px) to show current fuel level. Implement audio events
+  in `sfx/README.md` related to fuel events.
 
 ### Per-stage verification
 
@@ -720,6 +756,8 @@ DARK_GRAY = (64, 64, 64)
 GRAY = (128, 128, 128)
 ASTEROID_MIN_FILL = 72   # 72,72,72 = dark gray
 ASTEROID_MAX_FILL = 152  # 152,152,152 = medium gray
+FUEL_BAR_FG = (0, 255, 0)   # bright green
+FUEL_BAR_BG = (0, 64, 0)    # dark green
 # And so on...
 ```
 
