@@ -23,6 +23,7 @@ from game_constants import (
     FPS,
     FRIENDLY_FIRE_MESSAGE,
     INITIAL_WINDOW_SIZE,
+    MINE_FRIENDLY_FIRE_MESSAGE,
     MIN_WINDOW_HEIGHT,
     MIN_WINDOW_WIDTH,
     SFX_MIXER_BUFFER,
@@ -146,7 +147,8 @@ class SuperAsteroidsApp:
         # Death SFX (sfx/README.md): the friendly-fire sound is reserved for
         # exactly that; EVERY other death (asteroid contact, UFO contact,
         # hostile fire) uses the generic one.
-        if special_message == FRIENDLY_FIRE_MESSAGE:
+        if special_message in (FRIENDLY_FIRE_MESSAGE,
+                               MINE_FRIENDLY_FIRE_MESSAGE):
             self._sound.play(SFX_SHIP_DESTROYED_FRIENDLY_FIRE)
         else:
             self._sound.play(SFX_SHIP_DESTROYED_ASTEROID)

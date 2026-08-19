@@ -1,13 +1,14 @@
 """Player weapons.
 
-Stage 5: all three weapons (Cannon, Laser, Ramming Shield) are live, with
-power levels 1-3 driven by powerup pickups. ``make_weapon`` materializes a
-weapon from its spec name (what powerup icons carry).
+All four weapons (Cannon, Laser, Ramming Shield, Shrapnel Mines) are live,
+with power levels 1-3 driven by powerup pickups. ``make_weapon`` materializes
+a weapon from its spec name (what powerup icons carry).
 """
 
 from weapons.base import ChargedWeapon, Weapon
 from weapons.cannon import Cannon
 from weapons.laser import Laser
+from weapons.mine import ShrapnelMines
 from weapons.shield import RammingShield
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "ChargedWeapon",
     "Laser",
     "RammingShield",
+    "ShrapnelMines",
     "Weapon",
     "make_weapon",
 ]
@@ -26,6 +28,7 @@ _WEAPONS = {
     Cannon.NAME: Cannon,
     Laser.NAME: Laser,
     RammingShield.NAME: RammingShield,
+    ShrapnelMines.NAME: ShrapnelMines,
 }
 
 

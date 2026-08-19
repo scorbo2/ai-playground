@@ -5,6 +5,7 @@ from entities.asteroid import (
     spawn_level_asteroids,
     spawn_title_screen_asteroids,
 )
+from entities.mine import ShrapnelMine
 from entities.player import PlayerCraft, player_hits_asteroid
 from entities.powerup import (
     Powerup,
@@ -19,6 +20,7 @@ __all__ = [
     "CannonProjectile",
     "PlayerCraft",
     "Powerup",
+    "ShrapnelMine",
     "UFO",
     "player_hits_asteroid",
     "player_hits_ufo",

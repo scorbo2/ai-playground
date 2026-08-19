@@ -8,6 +8,7 @@ entirely from play on level advancement where applicable.
 from effects.particles import (
     Particle,
     spawn_destruction_explosion,
+    spawn_mine_detonation,
     spawn_split_explosion,
     spawn_thruster_puffs,
     spawn_ufo_explosion,
@@ -18,6 +19,7 @@ __all__ = [
     "Particle",
     "Starfield",
     "spawn_destruction_explosion",
+    "spawn_mine_detonation",
     "spawn_split_explosion",
     "spawn_thruster_puffs",
     "spawn_ufo_explosion",

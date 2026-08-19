@@ -31,6 +31,7 @@ RED = (255, 0, 0)
 GREEN = (0, 255, 0)
 YELLOW = (255, 255, 0)
 ORANGE = (255, 165, 0)
+BROWN = (139, 69, 19)
 LIGHT_BLUE = (173, 216, 230)
 CYAN = (0, 255, 255)
 LIGHT_RED = (255, 127, 127)
@@ -160,6 +161,50 @@ SHIELD_RECHARGE = (1, 3, 3)            # charge units/frame once released
 # level 1 -> 40/5 = 8 px/frame, the craft's max speed).
 SHIELD_BOUNCE_DIVISORS = (5, 8, 10)
 
+# ----------------------------------------------------------------- shrapnel mines
+# A mine is dropped from the craft's rear, coasts to a stop under the craft's
+# friction, and - once its launch grace expires - arms when something comes
+# within its invisible activation radius. A mine that is touched outright (or
+# whose arming countdown runs out) detonates into an 8-way burst of cannon
+# projectiles. Per the spec, mines and their projectiles wrap the screen, and
+# undetonated mines leave play at the end of each level.
+MINE_RADIUS = 12                       # drawn circle = collision radius (spec)
+MINE_OUTLINE_WIDTH = 2                 # white border
+MINE_FILL = BROWN                      # brown fill
+# The "crosshair" inside the circle pulses YELLOW for a few frames on a
+# fixed cadence. Its steady color is light gray while the mine is armed but
+# not yet activated, and light red once activated (the pulse itself stays).
+MINE_CROSSHAIR_IDLE = (170, 170, 170)  # light gray, unactivated
+MINE_CROSSHAIR_ACTIVE = LIGHT_RED      # light red, activated
+MINE_CROSSHAIR_PULSE_INTERVAL = 120    # frames between pulses
+MINE_CROSSHAIR_PULSE_YELLOWS = 5       # frames yellow during each pulse
+# Launch: the craft's velocity plus this much BACKWARD drift (spec: 2 px/frame).
+MINE_BACK_LAUNCH_SPEED = 2
+# Invisible activation radius: ANY object entering it (once out of grace)
+# arms the mine and starts the detonation countdown. Wrap-aware (spec).
+MINE_ACTIVATION_RADIUS = 150
+MINE_GRACE = 90                        # frames with no activation (all objects)
+                                       # and no self-collision (craft only)
+MINE_DETONATION_DELAY = 180            # frames from activation to explosion
+# Detonation: an outward burst of cannon-style projectiles (N,NE,E,SE,S,SW,W,
+# NW) plus a 100-particle brown explosion (same count as a UFO, spec).
+MINE_BURST_ANGLE_STEP = 45             # 8 compass points, 45 deg apart
+MINE_BURST_ANGLES = tuple(a * MINE_BURST_ANGLE_STEP for a in range(8))
+MINE_BURST_PROJECTILE_DISTANCE = 500   # shorter than the player's 1000 px
+MINE_DETONATION_PARTICLE_COUNT = 100   # same as the UFO explosion
+MINE_DETONATION_COLOR = BROWN
+# One row per power level (index = power_level - 1):
+#   (in-play cap, burst projectile size, burst projectile speed, its color).
+# Levels 1 and 2 burst level-1 cannon shots (2x2 yellow at 6 px/frame); level
+# 3 bumps the burst to level-3 cannon shots (4x4 white at 8 px/frame). All
+# burst shots travel MINE_BURST_PROJECTILE_DISTANCE and carry no grace.
+MINE_LEVEL_SPECS = (
+    (1, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED, YELLOW),
+    (3, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED, YELLOW),
+    (5, CANNON_PROJECTILE_SIZE_L3, CANNON_PROJECTILE_SPEED_L3, WHITE),
+)
+MINE_FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE - WATCH THOSE MINES!"
+
 # ------------------------------------------------------------------ powerups
 POWERUP_RADIUS = 20                    # px
 POWERUP_SPEED = 2                      # px/frame drift
@@ -170,6 +215,9 @@ POWERUP_TYPES = (
     ("Cannon", YELLOW, "C"),           # (weapon name, icon color, label letter)
     ("Laser", LIGHT_BLUE, "L"),
     ("Shield", RED, "S"),
+    # Shrapnel mine icon (spec: Powerups): brown circle, white "M". The name
+    # matches ShrapnelMines.NAME so the HUD and powerup share one string.
+    ("Shrapnel mines", BROWN, "M"),
 )
 POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
 POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}

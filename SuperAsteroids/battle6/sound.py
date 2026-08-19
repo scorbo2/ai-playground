@@ -1,5 +1,5 @@
 """Sound engine: load every effect from ``sfx/`` into memory at startup and
-play one-shots plus the two continuous loops (thrusters, UFO hum).
+play one-shots plus the continuous loops (thrusters, UFO hum, mine pulse).
 
 Per the spec (SuperAsteroids2.md -> "Sound"):
   - all effects are loaded into memory when the game starts;
@@ -13,11 +13,14 @@ Per the spec (SuperAsteroids2.md -> "Sound"):
 
 Loop discipline: the game state calls ``set_active_loops()`` with the set
 of loops that should be audible right now (the thruster loop while the Up
-key drives thrust, the UFO loop while at least one UFO is active). The app
-clears the set on every pause / game-over / mode transition, so no loop can
-survive a frozen or abandoned game. Toggling sound off stops every loop
-immediately; toggling back on re-establishes whatever the game state asked
-for (the per-frame sync call keeps that set current).
+key drives thrust, and the UFO loop while at least one UFO is active). The
+mine-pulse sound is NOT a loop - it is a one-shot that fires once every
+120 frames while at least one unactivated mine is "scanning" for a target
+(the game state plays it as a discrete event). The app clears the set on
+every pause / game-over / mode transition, so no loop can survive a frozen
+or abandoned game. Toggling sound off stops every loop immediately;
+toggling back on re-establishes whatever the game state asked for (the
+per-frame sync call keeps that set current).
 """
 
 import sys
@@ -46,6 +49,9 @@ SFX_POWERUP_DESTROYED = "powerup_destroyed"
 SFX_POWERUP_COLLECTED = "powerup_collected"
 SFX_SHIP_DESTROYED_ASTEROID = "ship_destroyed_asteroid"
 SFX_SHIP_DESTROYED_FRIENDLY_FIRE = "ship_destroyed_friendly_fire"
+SFX_MINE_ACTIVATED = "mine_activated"
+SFX_MINE_PULSE = "mine_pulse"
+SFX_MINE_DETONATE = "mine_detonate"
 SFX_UFO = "ufo"
 SFX_UFO_DESTROYED = "ufo_destroyed"
 SFX_THRUSTERS = "thrusters"
@@ -69,6 +75,9 @@ ALL_SOUNDS = (
     SFX_POWERUP_COLLECTED,
     SFX_SHIP_DESTROYED_ASTEROID,
     SFX_SHIP_DESTROYED_FRIENDLY_FIRE,
+    SFX_MINE_ACTIVATED,
+    SFX_MINE_PULSE,
+    SFX_MINE_DETONATE,
     SFX_UFO,
     SFX_UFO_DESTROYED,
     SFX_THRUSTERS,

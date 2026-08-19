@@ -20,6 +20,8 @@ import pygame
 
 from game_constants import (
     LIGHT_RED,
+    MINE_DETONATION_COLOR,
+    MINE_DETONATION_PARTICLE_COUNT,
     PARTICLE_ALPHA_DECAY_RANGE,
     PARTICLE_COUNT_PER_RADIUS,
     PARTICLE_SIZE,
@@ -157,6 +159,13 @@ def spawn_ufo_explosion(x: float, y: float) -> list:
     """A UFO destroyed: a flat 100 light red particles (spec: Enemy UFOs)."""
     return [_explosion_particle(x, y, LIGHT_RED)
             for _ in range(UFO_PARTICLE_COUNT)]
+
+
+def spawn_mine_detonation(x: float, y: float) -> list:
+    """A shrapnel mine detonates: a flat 100 brown particles (spec:
+    Shrapnel Mines)."""
+    return [_explosion_particle(x, y, MINE_DETONATION_COLOR)
+            for _ in range(MINE_DETONATION_PARTICLE_COUNT)]
 
 
 def spawn_thruster_puffs(craft) -> list:

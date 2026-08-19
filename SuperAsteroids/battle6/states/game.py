@@ -1,18 +1,18 @@
 """Game Mode.
 
-Stage 6: all three weapons (Cannon/Laser/Shield, power levels 1-3 via
-powerup pickups), the 30-second powerup spawn timer, level-based powerup
-drop rolls on asteroid impact events, laser and shield collision handling,
-the --debug hotkeys, and - new this stage - the enemy UFOs: the 3-minute
-spawn clock (max 3 active, survives level advances), straight drift with
-periodic deflection, their 120-frame firing cadence aimed at the craft,
-powerup stealing, and the full UFO collision matrix from the spec.
+Stage 6: Cannon/Laser/ShIELD (power levels 1-3 via powerup pickups), the
+30-second powerup spawn timer, level-based powerup drop rolls on asteroid
+impact events, laser and shield collision handling, the --debug hotkeys,
+and the enemy UFOs: the 1-minute spawn clock (max 3 active, survives level
+advances), straight drift with periodic deflection, their 120-frame firing
+cadence aimed at the craft, powerup stealing, and the full UFO collision
+matrix.
 
 Stage 7 (sound): every gameplay event plays its SFX from sfx/ (weapon
 activations, rams, asteroid split/destruction, powerup spawn/collect/
-destroy, UFO kills), and the two continuous loops - the thruster loop
-while thrusting and the UFO loop while at least one UFO is active - are
-reconciled with the simulation once per frame.
+destroy, UFO kills), and the continuous loops - the thruster loop while
+thrusting, the UFO loop while at least one UFO is active - are reconciled
+with the simulation once per frame.
 
 Stage 8 (cosmetics): explosion particles on every asteroid split and
 destruction and UFO kill, thruster exhaust puffs while Up is held, and
@@ -20,6 +20,20 @@ the app-owned starfield drawn behind everything (it animates in every
 mode, so it needs no state wiring in this file beyond drawing it).
 Level advancement sweeps the particles exactly like every other
 transient object (spec: Game Mode).
+
+Stage 9 (shrapnel mines): the fourth weapon. Space drops one mine from the
+craft's rear (capped 1/3/5 by power level, holding does nothing); each mine
+coasts to a stop under the craft's friction and, once its 90-frame launch
+grace expires, arms when anything comes within 150 px (wrap-aware). A mine
+arms for real when touched outright (bypassing the fuse) or when its
+180-frame fuse runs out, and detonates into an 8-way burst of cannon shots
+plus a 100-particle brown explosion. Mines and their burst shots can kill
+the craft ("FRIENDLY FIRE - WATCH THOSE MINES!") unless the ramming shield
+is up; the laser and shield also detonate mines on contact; mines can be
+armed by any projectile. Undetonated mines and their burst shots leave play
+at each level. The mine "scanning" pulse plays as a one-shot every
+120 frames per unactivated mine (NOT a continuous loop); mine arm/detonate
+one-shots fire on those events.
 
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
@@ -29,19 +43,25 @@ hidden, no controls work, and no timers (spawn or game time) advance.
 Frame order in the playing phase (matters for edge cases):
   1. movement: craft (emits thruster exhaust while thrusting), asteroids,
      player projectiles, UFOs (drift plus their cadence shots), UFO
-     projectiles, powerup drift, then the cosmetic particle field
-     advances and its faded members are pruned
+     projectiles, powerup drift, mine drift, mine projectile drift,
+     then the cosmetic particle field advances and its faded members
+     are pruned
   2. spawn timers (powerup, then UFO), then weapon charge drain/recharge
   3. player weapons vs. the world (projectiles, laser beam, shield ram) -
-     this is also where UFOs get destroyed by player weapons
-  4. UFO projectiles vs. the world (asteroids without score, powerup
-     icons, the craft -> game over "HOSTILE FIRE!" unless shielded)
-  5. craft death check (fatal asteroid or UFO contact)
-  6. powerup collection (any time, even during the icon's grace)
-  7. drifting powerups vs. asteroids (out of grace only, no score)
-  8. UFOs vs. powerups (steals - work even during the icon's grace)
-  9. level advancement when the field is clear (UFOs and their
-     projectiles leave play; the UFO spawn timer PERSISTS)
+     this is also where UFOs get destroyed by player weapons, and where
+     player projectiles/laser/shield detonate mines on contact
+  4. mine interactions: contact detonations (UFO, craft, projectile,
+     asteroid), proximity activation (150px, latching), fuse expiry
+  5. mine burst projectiles vs. the world (asteroid score, powerup,
+     UFO, other mine detonation, craft friendly fire)
+  6. UFO projectiles vs. the world (asteroids without score, powerup
+     icons, mines, the craft -> game over "HOSTILE FIRE!" unless shielded)
+  7. craft death check (fatal asteroid or UFO contact)
+  8. powerup collection (any time, even during the icon's grace)
+  9. drifting powerups vs. asteroids (out of grace only, no score)
+  10. UFOs vs. powerups (steals - work even during the icon's grace)
+  11. level advancement when the field is clear (UFOs, mines, and their
+      projectiles leave play; the UFO spawn timer PERSISTS)
 """
 
 import math
@@ -49,13 +69,13 @@ import random
 
 import pygame
 
-from entities import (PlayerCraft, player_hits_asteroid,
+from entities import (CannonProjectile, PlayerCraft, player_hits_asteroid,
                       player_hits_ufo, spawn_level_asteroids, spawn_ufo)
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
 from effects.particles import (spawn_destruction_explosion,
-                               spawn_split_explosion, spawn_thruster_puffs,
-                               spawn_ufo_explosion)
+                               spawn_mine_detonation, spawn_split_explosion,
+                               spawn_thruster_puffs, spawn_ufo_explosion)
 from font_manager import render_text
 from game_constants import (
     ASTEROID_MIN_RADIUS_FOR_SPLIT,
@@ -71,6 +91,10 @@ from game_constants import (
     LEVEL_ASTEROID_COUNT_INCREMENT,
     LEVEL_INTRO_FADE,
     LEVEL_INTRO_HOLD,
+    MINE_BURST_ANGLES,
+    MINE_BURST_PROJECTILE_DISTANCE,
+    MINE_FRIENDLY_FIRE_MESSAGE,
+    MINE_LEVEL_SPECS,
     PLAYER_RADIUS,
     POWERUP_DROP_CHANCES,
     POWERUP_INTERVAL,
@@ -86,6 +110,9 @@ from sound import (
     SFX_ASTEROID_SPLIT,
     SFX_CANNON_BY_LEVEL,
     SFX_LASER_BY_LEVEL,
+    SFX_MINE_ACTIVATED,
+    SFX_MINE_DETONATE,
+    SFX_MINE_PULSE,
     SFX_POWERUP_COLLECTED,
     SFX_POWERUP_DESTROYED,
     SFX_POWERUP_SPAWN,
@@ -96,7 +123,8 @@ from sound import (
     SFX_UFO_DESTROYED,
 )
 from states.base import GameModeState
-from weapons import Cannon, ChargedWeapon, Laser, RammingShield, make_weapon
+from weapons import (Cannon, ChargedWeapon, Laser, RammingShield,
+                     ShrapnelMines, make_weapon)
 
 
 class GameState(GameModeState):
@@ -120,6 +148,8 @@ class GameState(GameModeState):
         # (no score, no enemy friendly-fire, shield-blocked) differ from
         # the player's, and two passes keep both rule sets flat.
         self._ufo_projectiles: list = []
+        self._mines: list = []
+        self._mine_projectiles: list = []
         self._powerups: list = []
         self._ufos: list = []
         # Cosmetic-only particles (explosion debris, thruster puffs). They
@@ -173,6 +203,8 @@ class GameState(GameModeState):
         self._craft.reset(width // 2, height // 2)
         self._projectiles = []
         self._ufo_projectiles = []
+        self._mines = []
+        self._mine_projectiles = []
         self._powerups = []
         self._ufos = []
         # Cosmetic debris of the level just left behind dies with it
@@ -221,11 +253,16 @@ class GameState(GameModeState):
 
     def _on_weapon_press(self) -> None:
         """One space press: the cannon spawns projectiles, the charged
-        weapons arm their beam/shield. ONLY a successful activation
-        records a shot (spec: "Weapon activation") - or plays its SFX:
-        the firing sounds key off the same success, so a blocked press
-        (projectile cap, charge below 20) is silent and not counted."""
-        if self._weapon.on_press(self._craft, self._projectiles):
+        weapons arm their beam/shield, the mine weapon drops a mine.
+        ONLY a successful activation records a shot (spec: "Weapon
+        activation") - or plays its SFX: the firing sounds key off the
+        same success, so a blocked press (projectile cap, charge below 20,
+        mine cap reached) is silent and not counted."""
+        # Mine cap is over LIVE MINES, not projectiles: the weapon needs
+        # the mine list to check the count.
+        active = self._mines if isinstance(self._weapon, ShrapnelMines) \
+            else self._projectiles
+        if self._weapon.on_press(self._craft, active):
             self._score.record_shot()
             self._play_weapon_activation_sound()
 
@@ -253,6 +290,8 @@ class GameState(GameModeState):
             self._spawn_debug_powerup("Laser")
         elif key == pygame.K_s:
             self._spawn_debug_powerup("Shield")
+        elif key == pygame.K_m:
+            self._spawn_debug_powerup("Shrapnel mines")
         elif key == pygame.K_u:
             self._spawn_debug_ufo()
 
@@ -335,6 +374,17 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y, width, height))
         for powerup in self._powerups:
             powerup.update(width, height)
+        for mine in self._mines:
+            mine.update(width, height)
+        # The "scanning" pulse is a one-shot every 120 frames per mine
+        # (NOT a continuous loop - spec: sfx/README). Fire on the first
+        # frame of each pulse cycle for non-activated mines only.
+        for mine in self._mines:
+            if not mine.activated and mine.pulse_onset:
+                self.app.sound.play(SFX_MINE_PULSE)
+                break  # one pulse sound per frame is plenty
+        for projectile in self._mine_projectiles:
+            projectile.update(width, height)
         # Cosmetic particles keep advancing until their alpha fades to 0;
         # Particle.update() reports its own fade-out, so a filter is the
         # whole cleanup. (No width/height: particles do not wrap.)
@@ -347,6 +397,10 @@ class GameState(GameModeState):
 
         if not self._resolve_weapon_hits(width, height):
             return  # friendly fire already took us to Game Over
+        if not self._resolve_mine_interactions(width, height):
+            return  # mine friendly fire already took us to Game Over
+        if not self._resolve_mine_projectile_hits(width, height):
+            return  # mine burst friendly fire already took us to Game Over
         if not self._resolve_ufo_projectile_hits(width, height):
             return  # hostile fire already took us to Game Over
         if self._resolve_craft_deaths(width, height):
@@ -465,6 +519,19 @@ class GameState(GameModeState):
                 # the destruction explosion is a Stage 8 effect.
                 self._destroy_ufo(ufo)
                 continue
+            mine = next(
+                (m for m in self._mines
+                 if projectile.hits_circle(m.x, m.y, m.radius,
+                                           width, height)),
+                None,
+            )
+            if mine is not None:
+                # A player projectile touching a mine detonates it
+                # (spec: Shrapnel Mines - contact set). The projectile is
+                # consumed; the burst shots land in the mine projectile
+                # list for the next resolution pass.
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
             if (projectile.can_hit_player
                     and projectile.hits_circle(self._craft.x, self._craft.y,
                                                PLAYER_RADIUS, width, height)):
@@ -520,6 +587,19 @@ class GameState(GameModeState):
                 self._destroy_powerup(powerup)
                 weapon.deactivate_after_hit()
                 return
+            mine = next(
+                (m for m in self._mines
+                 if torus_distance(sx, sy, m.x, m.y, width, height)
+                 <= m.radius),
+                None,
+            )
+            if mine is not None:
+                # The laser detonates mines on contact (spec: Shrapnel
+                # Mines). The beam is spent by the hit, like every other
+                # target.
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                weapon.deactivate_after_hit()
+                return
             ufo = next(
                 (u for u in self._ufos
                  if torus_distance(sx, sy, u.x, u.y, width, height)
@@ -544,9 +624,10 @@ class GameState(GameModeState):
         # At most one ram per frame: each bounce DISCARDS the craft's
         # current velocity, so a second simultaneous impact would only
         # throw the first bounce away. Asteroids keep first dibs, then
-        # UFOs; the rest queue for next frame.
+        # mines, then UFOs; the rest queue for next frame.
         if not self._shield_rams_asteroid(weapon, width, height):
-            self._shield_rams_ufo(weapon, width, height)
+            if not self._shield_rams_mine(weapon, width, height):
+                self._shield_rams_ufo(weapon, width, height)
         # Icons touching the ring outside their grace period are destroyed
         # - through _destroy_powerup so they get the same destruction cue
         # as every other destroy path (spec: "by any means"). In-grace
@@ -597,7 +678,7 @@ class GameState(GameModeState):
         return False
 
     def _shield_rams_ufo(self, weapon: RammingShield,
-                         width: int, height: int) -> None:
+                          width: int, height: int) -> None:
         """First UFO touching the ring: destroyed instantly at ANY power
         level (spec: Ramming Shield / Enemy UFOs). The bounce formula is
         the same as for asteroids, with the UFO's 30 px bounding radius in
@@ -610,6 +691,265 @@ class GameState(GameModeState):
                 self._craft.bounce(
                     dx, dy, ufo.radius / weapon.bounce_divisor)
                 return
+
+    def _shield_rams_mine(self, weapon: RammingShield,
+                          width: int, height: int) -> bool:
+        """First mine touching the ring: detonated + bounce. Returns True
+        if a ram happened (so no UFO can ram the same frame). The mine's
+        own 12 px radius feeds the bounce formula. The detonation cue
+        (SFX_MINE_DETONATE) plays from _detonate_mine; no separate ram cue
+        is used (same pattern as the UFO ram)."""
+        for mine in list(self._mines):
+            dx = shortest_delta(self._craft.x - mine.x, width)
+            dy = shortest_delta(self._craft.y - mine.y, height)
+            if math.hypot(dx, dy) <= weapon.shield_radius + mine.radius:
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                self._craft.bounce(
+                    dx, dy, mine.radius / weapon.bounce_divisor)
+                return True
+        return False
+
+    # ---------------------------------------------------------------- mines
+
+    def _detonate_mine(self, mine) -> list:
+        """Detonate a mine: remove it from play, play the SFX, add the
+        100-particle brown explosion. Returns the 8-way burst projectiles
+        (the caller appends them to ``self._mine_projectiles``).
+
+        The ValueError guard matters: several detonation paths (player
+        projectile, laser, shield, contact, fuse) can all target the same
+        mine in one frame - the SFX and explosion each fire exactly once.
+        """
+        try:
+            self._mines.remove(mine)
+        except ValueError:
+            return []  # already detonated this frame
+        self.app.sound.play(SFX_MINE_DETONATE)
+        self._particles.extend(spawn_mine_detonation(mine.x, mine.y))
+        return self._mine_burst_projectiles(mine)
+
+    def _mine_burst_projectiles(self, mine) -> list:
+        """The 8-way burst: ``CannonProjectile`` instances seeded at the
+        mine's position with velocity = mine velocity plus the burst speed
+        along each of the 8 compass angles. The spec is the mine's OWN
+        power level (fixed at launch), not the current weapon."""
+        _cap, size, speed, color = MINE_LEVEL_SPECS[mine.power_level - 1]
+        projectiles = []
+        for angle_deg in MINE_BURST_ANGLES:
+            rad = math.radians(angle_deg)
+            projectiles.append(CannonProjectile(
+                x=mine.x, y=mine.y,
+                vx=mine.vx + speed * math.cos(rad),
+                vy=mine.vy + speed * math.sin(rad),
+                size=size, color=color,
+                distance_limit=MINE_BURST_PROJECTILE_DISTANCE,
+                grace_frames=0,  # no grace (spec: burst shots travel instantly)
+            ))
+        return projectiles
+
+    def _resolve_mine_interactions(self, width: int, height: int) -> bool:
+        """Contact detonations, proximity activations, and fuse expiries
+        (spec: Shrapnel Mines). Returns False iff the craft died to a
+        mine's detonation (GameOver already triggered).
+
+        Contact is checked FIRST for each mine (it bypasses the grace for
+        everything except the craft). The 150 px proximity activation is
+        checked LAST (it only arms the fuse, does not detonate).
+
+        Side effects on the contacted object:
+          - Asteroid: no effect (the rock continues)
+          - UFO: destroyed (same cue as any other destruction)
+          - Craft: game over (or bounce if the shield is raised)
+          - Projectile (any type): consumed
+        """
+        shield_up = (isinstance(self._weapon, RammingShield)
+                     and self._weapon.firing)
+        for mine in list(self._mines):
+            if mine not in self._mines:
+                continue  # already detonated by an earlier pass this frame
+
+            # -- Contact: instantaneous detonation (bypasses fuse) --
+            # UFOs
+            ufo = next((u for u in self._ufos
+                        if mine.touching(u.x, u.y, u.radius,
+                                         width, height)), None)
+            if ufo is not None:
+                self._destroy_ufo(ufo)
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+            # Craft (the ONLY object immune to contact during grace)
+            if not mine.in_grace and mine.touching(
+                    self._craft.x, self._craft.y, PLAYER_RADIUS,
+                    width, height):
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                if shield_up:
+                    dx = shortest_delta(self._craft.x - mine.x, width)
+                    dy = shortest_delta(self._craft.y - mine.y, height)
+                    self._craft.bounce(
+                        dx, dy, mine.radius / self._weapon.bounce_divisor)
+                else:
+                    self.app.to_game_over(MINE_FRIENDLY_FIRE_MESSAGE)
+                    return False
+                continue
+            # Player projectiles
+            proj = next(
+                (p for p in self._projectiles
+                 if p.hits_circle(mine.x, mine.y, mine.radius,
+                                  width, height)),
+                None,
+            )
+            if proj is not None:
+                self._projectiles.remove(proj)
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+            # UFO projectiles
+            ufo_proj = next(
+                (p for p in self._ufo_projectiles
+                 if p.hits_circle(mine.x, mine.y, mine.radius,
+                                  width, height)),
+                None,
+            )
+            if ufo_proj is not None:
+                self._ufo_projectiles.remove(ufo_proj)
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+            # Mine projectiles (burst shots from other mines)
+            mine_proj = next(
+                (p for p in self._mine_projectiles
+                 if p.hits_circle(mine.x, mine.y, mine.radius,
+                                  width, height)),
+                None,
+            )
+            if mine_proj is not None:
+                self._mine_projectiles.remove(mine_proj)
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+            # Asteroids (contact detonates the mine; the rock continues)
+            asteroid = next(
+                (a for a in self._asteroids
+                 if mine.touching(a.x, a.y, a.radius,
+                                  width, height)),
+                None,
+            )
+            if asteroid is not None:
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+
+            # -- Fuse expiry: activated mine whose countdown hit 0 --
+            if mine.activated and mine.detonation_timer <= 0:
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+
+            # -- Proximity activation: 150px, latching, once per mine --
+            # During grace NO object can activate the mine (spec).
+            if not mine.in_grace and not mine.activated:
+                if self._mine_in_activation_range(mine, width, height):
+                    mine.activate()
+                    self.app.sound.play(SFX_MINE_ACTIVATED)
+        return True
+
+    def _mine_in_activation_range(self, mine, width: int,
+                                  height: int) -> bool:
+        """True if any object in the activation set is within the mine's
+        invisible 150 px radius (wrap-aware). Mines and powerups are NOT in
+        the activation set (spec: Shrapnel Mines)."""
+        if mine.within_activation_radius(self._craft.x, self._craft.y,
+                                         PLAYER_RADIUS, width, height):
+            return True
+        for ufo in self._ufos:
+            if mine.within_activation_radius(
+                    ufo.x, ufo.y, ufo.radius, width, height):
+                return True
+        for asteroid in self._asteroids:
+            if mine.within_activation_radius(
+                    asteroid.x, asteroid.y, asteroid.radius, width, height):
+                return True
+        for proj in self._projectiles:
+            if mine.within_activation_radius(
+                    proj.x, proj.y, proj.half_size, width, height):
+                return True
+        for proj in self._ufo_projectiles:
+            if mine.within_activation_radius(
+                    proj.x, proj.y, proj.half_size, width, height):
+                return True
+        for proj in self._mine_projectiles:
+            if mine.within_activation_radius(
+                    proj.x, proj.y, proj.half_size, width, height):
+                return True
+        return False
+
+    def _resolve_mine_projectile_hits(self, width: int,
+                                      height: int) -> bool:
+        """Mine burst projectiles vs. the world (spec: Shrapnel Mines).
+        Returns False iff the craft died to a friendly-fire burst shot.
+
+        Arbitration order: asteroid (score), powerup (destroy), UFO
+        (destroy), other mine (detonate), shield (absorb), craft
+        (game over). A detonated mine's new burst projectiles accumulate
+        in ``new_bursts`` and are appended after the pass (they have not
+        yet moved, and extending ``self._mine_projectiles`` mid-iteration
+        would corrupt the ``survivors`` assignment).
+        """
+        shield_up = (isinstance(self._weapon, RammingShield)
+                     and self._weapon.firing)
+        live = list(self._asteroids)
+        replacements: list = []
+        survivors: list = []
+        new_bursts: list = []
+        for projectile in self._mine_projectiles:
+            asteroid = next(
+                (a for a in live
+                 if projectile.hits_circle(a.x, a.y, a.radius,
+                                           width, height)),
+                None,
+            )
+            if asteroid is not None:
+                live.remove(asteroid)
+                replacements.extend(self._apply_asteroid_impact(
+                    asteroid, score=True, destroy_outright=False,
+                    impact_point=(projectile.x, projectile.y)))
+                continue
+            powerup = next(
+                (p for p in self._powerups
+                 if not p.in_grace
+                 and projectile.hits_circle(p.x, p.y, p.radius,
+                                            width, height)),
+                None,
+            )
+            if powerup is not None:
+                self._destroy_powerup(powerup)
+                continue
+            ufo = next(
+                (u for u in self._ufos
+                 if projectile.hits_circle(u.x, u.y, u.radius,
+                                           width, height)),
+                None,
+            )
+            if ufo is not None:
+                self._destroy_ufo(ufo)
+                continue
+            mine = next(
+                (m for m in self._mines
+                 if projectile.hits_circle(m.x, m.y, m.radius,
+                                           width, height)),
+                None,
+            )
+            if mine is not None:
+                new_bursts.extend(self._detonate_mine(mine))
+                continue
+            if shield_up and projectile.hits_circle(
+                    self._craft.x, self._craft.y,
+                    self._weapon.shield_radius, width, height):
+                continue  # absorbed by the raised shield
+            if projectile.hits_circle(self._craft.x, self._craft.y,
+                                      PLAYER_RADIUS, width, height):
+                self.app.to_game_over(MINE_FRIENDLY_FIRE_MESSAGE)
+                return False
+            if not projectile.expired:
+                survivors.append(projectile)
+        self._mine_projectiles = survivors + new_bursts
+        self._asteroids = live + replacements
+        return True
 
     # ---------------------------------------------------------------- enemy fire
 
@@ -655,6 +995,17 @@ class GameState(GameModeState):
             )
             if powerup is not None:
                 self._destroy_powerup(powerup)
+                continue
+            mine = next(
+                (m for m in self._mines
+                 if projectile.hits_circle(m.x, m.y, m.radius,
+                                           width, height)),
+                None,
+            )
+            if mine is not None:
+                # A UFO projectile touching a mine detonates it
+                # (spec: Shrapnel Mines - contact set).
+                self._mine_projectiles.extend(self._detonate_mine(mine))
                 continue
             if shield_up and projectile.hits_circle(
                     self._craft.x, self._craft.y, self._weapon.shield_radius,
@@ -860,6 +1211,10 @@ class GameState(GameModeState):
             for projectile in self._projectiles:
                 projectile.draw(screen)
             for projectile in self._ufo_projectiles:
+                projectile.draw(screen)
+            for mine in self._mines:
+                mine.draw(screen)
+            for projectile in self._mine_projectiles:
                 projectile.draw(screen)
             # Debris and exhaust over the field, under the craft and beam:
             # an explosion reads as happening IN the world the craft flies

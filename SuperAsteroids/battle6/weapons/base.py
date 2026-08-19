@@ -50,9 +50,15 @@ class Weapon:
         unaffected."""
         pass
 
-    def on_press(self, craft, active_projectiles) -> bool:
+    def on_press(self, craft, active) -> bool:
         """Space pressed. Returns True iff this was a SUCCESSFUL weapon
-        activation (the state records exactly one shot for it)."""
+        activation (the state records exactly one shot for it).
+
+        ``active`` is the list of in-play objects that gate this press.
+        Projectile weapons are handed the projectile list (an in-flight cap
+        may apply); the shrapnel-mine weapon is handed the live-mine list,
+        because its cap is over MINES. Each weapon knows which it received
+        - the owning state selects it (see GameState._on_weapon_press)."""
         return False
 
     def update(self, space_held: bool) -> None:
