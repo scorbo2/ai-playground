@@ -445,7 +445,10 @@ At the end of each level, any undetonated shrapnel mines are removed from play.
 If the player craft collides with a shrapnel mine, or collides with any projectile launched from any shrapnel mine,
 this triggers an immediate Game Over with the special message "FRIENDLY FIRE - WATCH THOSE MINES!". Exception: if the
 player craft is equipped with the ramming shield, and the shield is active at the time of impact, the player craft
-takes no damage.
+takes no damage. Note that the 90 frame grace period for shrapnel mines applies to both the mine activation AND
+mine collision/immediate detonation. This prevents the mine from exploding as soon as it is spawned. The no-collision
+part of the mine's grace period only applies to the player craft. The no-activation part of the grace period applies
+to all game objects.
 
 Asteroids that are destroyed by a mine or by any mine projectile counts as a "hit" for scoring purposes.
 
