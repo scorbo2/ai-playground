@@ -17,12 +17,15 @@ These aren't mine! All credit goes to https://ci.itch.io/arcade-sound-effects-pa
 |fire_3|shield\_ram|The player collides with any asteroid while the shield is active.|
 |explosion\_2|asteroid\_split|An asteroid splits into smaller asteroids|
 |explosion\_5|asteroid\_destroyed|A small asteroid is destroyed (no further split)|
-|bubble|powerup\_spawn|A powerup icon has appeared!|
-|disappear|powerup\_destroyed|A powerup icon has been destroyed (by any means)|
-|powerup\_2|powerup\_collected|The player successfully collects a powerup icon|
+|bubble|powerup\_spawn|A powerup icon or fuel pod has appeared!|
+|disappear|powerup\_destroyed|A powerup icon or fuel pod has been destroyed (by any means)|
+|powerup\_2|powerup\_collected|The player successfully collects a powerup icon or fuel pod|
 |earthquake|ship\_destroyed\_asteroid|The player's ship is destroyed by an asteroid impact|
 |lose\_1|ship\_destroyed\_friendly\_fire|The player's ship is destroyed by friendly fire|
 |fire\_1|thrusters|Played in a continuous loop while thrusters are firing - stops playing when thrusters are deactivated|
 |animal\_cow|ufo|Played in a continuous loop while at least one UFO is active - stops playing when a UFO is destroyed|
 |harsh\_destruction|ufo\_destroyed|Played when a UFO is destroyed|
+|animal\_bird\_tweet|mine\_activated|A mine has been activated|
+|collect\_7|mine\_pulse|A non-activated mine "pulses" (scanning for targets)|
+|explosion\_4|mine\_detonate|A mine detonates|
 
