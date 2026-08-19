@@ -8,6 +8,7 @@ weapon from its spec name (what powerup icons carry).
 from weapons.base import ChargedWeapon, Weapon
 from weapons.cannon import Cannon
 from weapons.laser import Laser
+from weapons.mines import ShrapnelMines
 from weapons.shield import RammingShield
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "ChargedWeapon",
     "Laser",
     "RammingShield",
+    "ShrapnelMines",
     "Weapon",
     "make_weapon",
 ]
@@ -26,6 +28,7 @@ _WEAPONS = {
     Cannon.NAME: Cannon,
     Laser.NAME: Laser,
     RammingShield.NAME: RammingShield,
+    ShrapnelMines.NAME: ShrapnelMines,
 }
 
 

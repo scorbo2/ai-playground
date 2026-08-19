@@ -37,6 +37,7 @@ LIGHT_RED = (255, 127, 127)
 LIGHT_GRAY = (200, 200, 200)
 DARK_GRAY = (64, 64, 64)
 GRAY = (128, 128, 128)
+BROWN = (139, 69, 19)
 ASTEROID_MIN_FILL = 72                         # 72,72,72  (random asteroid fills)
 ASTEROID_MAX_FILL = 152                        # 152,152,152
 
@@ -160,6 +161,20 @@ SHIELD_RECHARGE = (1, 3, 3)            # charge units/frame once released
 # level 1 -> 40/5 = 8 px/frame, the craft's max speed).
 SHIELD_BOUNCE_DIVISORS = (5, 8, 10)
 
+# ------------------------------------------------------------------ mines
+MINE_RADIUS = 12                          # px, drawn circle radius
+MINE_BORDER_WIDTH = 2                     # px, white border
+MINE_FILL_COLOR = BROWN                   # brown fill
+MINE_ACTIVATION_RADIUS = 150              # px, invisible activation radius
+MINE_GRACE_FRAMES = 90                    # frames after launch before activation possible
+MINE_DETONATION_DELAY = 180               # frames after activation before explosion
+MINE_BACKWARD_SPEED = 2                   # px/frame added opposite ship heading
+MINE_PULSE_INTERVAL = 120                 # frames between crosshair pulses
+MINE_PULSE_DURATION = 5                   # frames pulse stays yellow
+MINE_MAX_IN_PLAY = (1, 3, 5)              # caps per power level
+MINE_PROJECTILE_TRAVEL = 500              # px cumulative travel for mine projectiles
+MINE_PROJECTILE_COUNT = 8                 # 8-way burst
+
 # ------------------------------------------------------------------ powerups
 POWERUP_RADIUS = 20                    # px
 POWERUP_SPEED = 2                      # px/frame drift
@@ -170,6 +185,7 @@ POWERUP_TYPES = (
     ("Cannon", YELLOW, "C"),           # (weapon name, icon color, label letter)
     ("Laser", LIGHT_BLUE, "L"),
     ("Shield", RED, "S"),
+    ("Shrapnel mines", BROWN, "M"),
 )
 POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
 POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}

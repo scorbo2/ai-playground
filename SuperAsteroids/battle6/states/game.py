@@ -50,12 +50,13 @@ import random
 import pygame
 
 from entities import (PlayerCraft, player_hits_asteroid,
-                      player_hits_ufo, spawn_level_asteroids, spawn_ufo)
+                      player_hits_ufo, ShrapnelMine, spawn_level_asteroids, spawn_ufo)
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
 from effects.particles import (spawn_destruction_explosion,
-                               spawn_split_explosion, spawn_thruster_puffs,
-                               spawn_ufo_explosion)
+                                spawn_mine_explosion,
+                                spawn_split_explosion, spawn_thruster_puffs,
+                                spawn_ufo_explosion)
 from font_manager import render_text
 from game_constants import (
     ASTEROID_MIN_RADIUS_FOR_SPLIT,
@@ -71,11 +72,16 @@ from game_constants import (
     LEVEL_ASTEROID_COUNT_INCREMENT,
     LEVEL_INTRO_FADE,
     LEVEL_INTRO_HOLD,
+    MINE_ACTIVATION_RADIUS,
+    MINE_PULSE_INTERVAL,
+    MINE_PROJECTILE_COUNT,
+    MINE_PROJECTILE_TRAVEL,
     PLAYER_RADIUS,
     POWERUP_DROP_CHANCES,
     POWERUP_INTERVAL,
     UFO_INTERVAL,
     UFO_MAX_ACTIVE,
+    UFO_RADIUS,
     WHITE,
 )
 from hud import HudData, draw_game_hud
@@ -86,6 +92,9 @@ from sound import (
     SFX_ASTEROID_SPLIT,
     SFX_CANNON_BY_LEVEL,
     SFX_LASER_BY_LEVEL,
+    SFX_MINE_ACTIVATED,
+    SFX_MINE_DETONATE,
+    SFX_MINE_PULSE,
     SFX_POWERUP_COLLECTED,
     SFX_POWERUP_DESTROYED,
     SFX_POWERUP_SPAWN,
@@ -96,7 +105,7 @@ from sound import (
     SFX_UFO_DESTROYED,
 )
 from states.base import GameModeState
-from weapons import Cannon, ChargedWeapon, Laser, RammingShield, make_weapon
+from weapons import Cannon, ChargedWeapon, Laser, RammingShield, ShrapnelMines, make_weapon
 
 
 class GameState(GameModeState):
@@ -120,6 +129,7 @@ class GameState(GameModeState):
         # (no score, no enemy friendly-fire, shield-blocked) differ from
         # the player's, and two passes keep both rule sets flat.
         self._ufo_projectiles: list = []
+        self._mines: list = []
         self._powerups: list = []
         self._ufos: list = []
         # Cosmetic-only particles (explosion debris, thruster puffs). They
@@ -173,6 +183,7 @@ class GameState(GameModeState):
         self._craft.reset(width // 2, height // 2)
         self._projectiles = []
         self._ufo_projectiles = []
+        self._mines = []
         self._powerups = []
         self._ufos = []
         # Cosmetic debris of the level just left behind dies with it
@@ -225,7 +236,17 @@ class GameState(GameModeState):
         records a shot (spec: "Weapon activation") - or plays its SFX:
         the firing sounds key off the same success, so a blocked press
         (projectile cap, charge below 20) is silent and not counted."""
-        if self._weapon.on_press(self._craft, self._projectiles):
+        weapon = self._weapon
+        if isinstance(weapon, ShrapnelMines):
+            # Mine weapon: check cap and spawn mine
+            if len(self._mines) >= weapon.max_mines():
+                return
+            mine = ShrapnelMine.spawn_from_craft(self._craft, weapon.power())
+            self._mines.append(mine)
+            self._score.record_shot()
+            self._play_weapon_activation_sound()
+            return
+        if weapon.on_press(self._craft, self._projectiles):
             self._score.record_shot()
             self._play_weapon_activation_sound()
 
@@ -253,6 +274,8 @@ class GameState(GameModeState):
             self._spawn_debug_powerup("Laser")
         elif key == pygame.K_s:
             self._spawn_debug_powerup("Shield")
+        elif key == pygame.K_m:
+            self._spawn_debug_powerup("Shrapnel mines")
         elif key == pygame.K_u:
             self._spawn_debug_ufo()
 
@@ -335,6 +358,78 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y, width, height))
         for powerup in self._powerups:
             powerup.update(width, height)
+        # Update mines: move, friction, grace, activation timer. Remove
+        # mines that have detonated (update returns False).
+        live_mines = []
+        mines_to_detonate = []
+        for mine in self._mines:
+            if not mine.update(width, height):
+                # Mine detonated by timer
+                mines_to_detonate.append(mine)
+                continue
+
+            # Play pulse sound for non-activated mines when the crosshair flashes
+            if not mine.activated and mine._pulse_timer % MINE_PULSE_INTERVAL == 0:
+                self.app.sound.play(SFX_MINE_PULSE)
+
+            # During grace, no activation or collision
+            if mine.grace_frames > 0:
+                live_mines.append(mine)
+                continue
+
+            # Collision with craft -> immediate detonation + game over
+            dist_craft = torus_distance(mine.x, mine.y, self._craft.x, self._craft.y, width, height)
+            if dist_craft <= mine.radius + PLAYER_RADIUS:
+                shield_up = isinstance(self._weapon, RammingShield) and self._weapon.firing
+                if not shield_up:
+                    self.app.to_game_over("FRIENDLY FIRE - WATCH THOSE MINES!")
+                    return
+                else:
+                    mines_to_detonate.append(mine)
+                    continue
+
+            # Collision with other objects -> immediate detonation
+            collided = False
+            for asteroid in self._asteroids:
+                if torus_distance(mine.x, mine.y, asteroid.x, asteroid.y, width, height) <= mine.radius + asteroid.radius:
+                    mines_to_detonate.append(mine)
+                    collided = True
+                    break
+            if collided:
+                continue
+
+            for ufo in self._ufos:
+                if torus_distance(mine.x, mine.y, ufo.x, ufo.y, width, height) <= mine.radius + UFO_RADIUS:
+                    mines_to_detonate.append(mine)
+                    collided = True
+                    break
+            if collided:
+                continue
+
+            # Activation check (after grace, no collision)
+            if not mine.activated:
+                activated = False
+                if dist_craft <= MINE_ACTIVATION_RADIUS + PLAYER_RADIUS:
+                    activated = True
+                else:
+                    for asteroid in self._asteroids:
+                        if torus_distance(mine.x, mine.y, asteroid.x, asteroid.y, width, height) <= MINE_ACTIVATION_RADIUS + asteroid.radius:
+                            activated = True
+                            break
+                    if not activated:
+                        for ufo in self._ufos:
+                            if torus_distance(mine.x, mine.y, ufo.x, ufo.y, width, height) <= MINE_ACTIVATION_RADIUS + UFO_RADIUS:
+                                activated = True
+                                break
+                if activated:
+                    mine.activate()
+                    self.app.sound.play(SFX_MINE_ACTIVATED)
+
+            live_mines.append(mine)
+        # Detonate mines collected this frame
+        for mine in mines_to_detonate:
+            self._handle_mine_detonation(mine, width, height)
+        self._mines = live_mines
         # Cosmetic particles keep advancing until their alpha fades to 0;
         # Particle.update() reports its own fade-out, so a filter is the
         # whole cleanup. (No width/height: particles do not wrap.)
@@ -468,7 +563,16 @@ class GameState(GameModeState):
             if (projectile.can_hit_player
                     and projectile.hits_circle(self._craft.x, self._craft.y,
                                                PLAYER_RADIUS, width, height)):
-                self.app.to_game_over(FRIENDLY_FIRE_MESSAGE)
+                # Shield blocks friendly fire (including mine projectiles)
+                shield_up = isinstance(self._weapon, RammingShield) and self._weapon.firing
+                if shield_up:
+                    # Absorbed, no game over
+                    continue
+                # Mine projectiles have special message
+                if getattr(projectile, 'source', 'player') == 'mine':
+                    self.app.to_game_over("FRIENDLY FIRE - WATCH THOSE MINES!")
+                else:
+                    self.app.to_game_over(FRIENDLY_FIRE_MESSAGE)
                 return False
             if not projectile.expired:
                 survivors.append(projectile)
@@ -533,6 +637,19 @@ class GameState(GameModeState):
                 self._destroy_ufo(ufo)
                 weapon.deactivate_after_hit()
                 return
+            # Mine check: laser detonates mine immediately
+            mine = next(
+                (m for m in self._mines
+                 if m.grace_frames <= 0 and torus_distance(sx, sy, m.x, m.y, width, height)
+                 <= m.radius),
+                None,
+            )
+            if mine is not None:
+                # Remove mine and detonate
+                self._mines.remove(mine)
+                self._handle_mine_detonation(mine, width, height)
+                weapon.deactivate_after_hit()
+                return
 
     def _resolve_shield_hits(self, width: int, height: int) -> None:
         """The ring rams asteroids and UFOs (destroy + bounce) and shreds
@@ -547,6 +664,18 @@ class GameState(GameModeState):
         # UFOs; the rest queue for next frame.
         if not self._shield_rams_asteroid(weapon, width, height):
             self._shield_rams_ufo(weapon, width, height)
+        # Shield vs mines: mine detonates immediately, no damage to craft,
+        # and the shield bounces using mine radius.
+        for mine in list(self._mines):
+            dx = shortest_delta(self._craft.x - mine.x, width)
+            dy = shortest_delta(self._craft.y - mine.y, height)
+            if mine.grace_frames <= 0 and math.hypot(dx, dy) <= weapon.shield_radius + mine.radius:
+                # Detonate mine
+                self._mines.remove(mine)
+                self._handle_mine_detonation(mine, width, height)
+                # Bounce craft away from mine using mine radius
+                self._craft.bounce(dx, dy, mine.radius / weapon.bounce_divisor)
+                break  # one ram per frame
         # Icons touching the ring outside their grace period are destroyed
         # - through _destroy_powerup so they get the same destruction cue
         # as every other destroy path (spec: "by any means"). In-grace
@@ -682,6 +811,47 @@ class GameState(GameModeState):
             self._particles.extend(spawn_ufo_explosion(ufo.x, ufo.y))
         except ValueError:
             pass  # already shredded by another hit this frame
+
+    def _handle_mine_detonation(self, mine, width: int, height: int) -> None:
+        """Explode a mine: sound, particles, and 8 projectiles."""
+        # Play detonation sound
+        self.app.sound.play(SFX_MINE_DETONATE)
+        # Brown explosion particles
+        self._particles.extend(spawn_mine_explosion(mine.x, mine.y))
+        # Spawn 8 projectiles in a burst
+        from game_constants import CANNON_LEVEL_SPECS, CANNON_PROJECTILE_DISTANCE, YELLOW
+        # Determine projectile specs based on mine power
+        power_idx = mine.power_level - 1
+        # Clamp index
+        if power_idx < 0 or power_idx >= len(CANNON_LEVEL_SPECS):
+            power_idx = 0
+        # For mines, level 3 uses level 3 cannon projectiles, otherwise level 1
+        # Spec: mine projectiles at level 3 use level 3 cannon projectiles
+        if mine.power_level >= 3:
+            proj_spec = CANNON_LEVEL_SPECS[2]  # level 3
+        else:
+            proj_spec = CANNON_LEVEL_SPECS[0]  # level 1
+        _, _, size, speed, color, _ = proj_spec
+        # 8 directions
+        from entities.projectile import CannonProjectile
+        angles = [i * 45 for i in range(8)]
+        for deg in angles:
+            rad = math.radians(deg)
+            vx = math.cos(rad) * speed
+            vy = math.sin(rad) * speed
+            proj = CannonProjectile(
+                x=mine.x,
+                y=mine.y,
+                vx=vx,
+                vy=vy,
+                size=size,
+                color=color,
+                distance_limit=MINE_PROJECTILE_TRAVEL,
+                grace_frames=0,  # no grace
+                source='mine',
+            )
+            self._projectiles.append(proj)
+        # Mine is removed by caller
 
     def _resolve_ufo_powerup_steals(self, width: int, height: int) -> None:
         """A UFO "steals" a powerup on contact: the icon is removed from
@@ -857,6 +1027,8 @@ class GameState(GameModeState):
                 powerup.draw(screen)
             for ufo in self._ufos:
                 ufo.draw(screen)
+            for mine in self._mines:
+                mine.draw(screen)
             for projectile in self._projectiles:
                 projectile.draw(screen)
             for projectile in self._ufo_projectiles:

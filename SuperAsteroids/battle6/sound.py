@@ -49,6 +49,9 @@ SFX_SHIP_DESTROYED_FRIENDLY_FIRE = "ship_destroyed_friendly_fire"
 SFX_UFO = "ufo"
 SFX_UFO_DESTROYED = "ufo_destroyed"
 SFX_THRUSTERS = "thrusters"
+SFX_MINE_ACTIVATED = "mine_activated"
+SFX_MINE_DETONATE = "mine_detonate"
+SFX_MINE_PULSE = "mine_pulse"
 
 # Cannon/laser fire sounds are indexed by the weapon's 0-based power level.
 SFX_CANNON_BY_LEVEL = (SFX_CANNON_L1, SFX_CANNON_L2, SFX_CANNON_L3)
@@ -72,6 +75,9 @@ ALL_SOUNDS = (
     SFX_UFO,
     SFX_UFO_DESTROYED,
     SFX_THRUSTERS,
+    SFX_MINE_ACTIVATED,
+    SFX_MINE_DETONATE,
+    SFX_MINE_PULSE,
 )
 
 # sfx/ sits next to this module (the project root).

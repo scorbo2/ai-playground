@@ -11,6 +11,7 @@ from entities.powerup import (
     spawn_drop_powerup,
     spawn_timer_powerup,
 )
+from entities.mine import ShrapnelMine
 from entities.projectile import CannonProjectile
 from entities.ufo import UFO, player_hits_ufo, spawn_ufo
 
@@ -19,6 +20,7 @@ __all__ = [
     "CannonProjectile",
     "PlayerCraft",
     "Powerup",
+    "ShrapnelMine",
     "UFO",
     "player_hits_asteroid",
     "player_hits_ufo",

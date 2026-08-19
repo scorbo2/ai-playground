@@ -30,7 +30,8 @@ class CannonProjectile:
     def __init__(self, x: float, y: float, vx: float, vy: float,
                  size: int = CANNON_PROJECTILE_SIZE, color=YELLOW,
                  distance_limit: float = CANNON_PROJECTILE_DISTANCE,
-                 grace_frames: int = CANNON_SELF_GRACE):
+                 grace_frames: int = CANNON_SELF_GRACE,
+                 source: str = "player"):
         self.x = x
         self.y = y
         self.vx = vx
@@ -43,6 +44,7 @@ class CannonProjectile:
         # their only kill threat is the player craft and it is live from
         # frame one - no self-kill window is needed.
         self.grace_frames = grace_frames
+        self.source = source
 
     @property
     def half_size(self) -> float:

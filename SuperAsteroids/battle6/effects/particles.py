@@ -159,6 +159,13 @@ def spawn_ufo_explosion(x: float, y: float) -> list:
             for _ in range(UFO_PARTICLE_COUNT)]
 
 
+def spawn_mine_explosion(x: float, y: float) -> list:
+    """A shrapnel mine detonated: same as UFO explosion but brown particles."""
+    from game_constants import BROWN
+    return [_explosion_particle(x, y, BROWN)
+            for _ in range(UFO_PARTICLE_COUNT)]
+
+
 def spawn_thruster_puffs(craft) -> list:
     """One thrusting frame of exhaust (spec: Thrusters): a random 2-3
     circles at the craft's BASE (half its height aft of center), each with
