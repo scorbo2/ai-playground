@@ -59,7 +59,7 @@ After the text fade out is complete, the player's ship appears in the center of 
 begin to move, player controls are enabled, and the game begins.
 
 On each level advancement, all explosion particles, powerup icons, thruster exhaust circles, projectiles, 
-and enemy UFOs are removed from play. The player's craft is returned to the center of the screen facing up,
+mines, and enemy UFOs are removed from play. The player's craft is returned to the center of the screen facing up,
 with velocity reset to 0. If the laser or shield were active at the end of the previous level, they are
 deactivated. Their charge is restored to 100%.
 
@@ -181,10 +181,11 @@ The HUD has a rounded cyan border with width 4 pixels. The HUD displays the foll
 
 - Current 1-based level number (label "Level:"). Font color: white.
 - The player's current scoring information is displayed next (see "Scoring the game").
-- Current weapon (label "Weapon:"). Display "Cannon", "Laser", or "Shield". Font color depends on weapon: Cannon is displayed
-  in yellow, Laser is displayed in light blue, and Shield is displayed in red.
+- Current weapon (label "Weapon:"). Display "Cannon", "Laser", or "Shield", or "Shrapnel mines". 
+  Font color depends on weapon: Cannon is displayed in yellow, Laser is displayed in light blue, 
+  Shield is displayed in red, and Shrapnel Mines is displayed in brown.
 - Current 1-based weapon power level (label "Power:"). Font color: matches weapon label color.
-- Weapon reload indicator (if applicable... see Weapons section). Label ("Charge:") in white text.
+- Weapon charge indicator (if applicable... see Weapons section). Label ("Charge:") in white text.
 - Sound status (label "Sound:"). "On" or "Off" depending on current sound state. White text.
 - Game time (label "Game time:"). Elapsed game time in minutes:seconds. This reflects active game time,
   not elapsed wall-clock time. Time spent in Pause Mode and time spent between levels does not count towards this.
@@ -222,6 +223,8 @@ level to level. All stats reset to 0 at the start of level 1.
   - between 10% and 50%: choose randomly from "Amateur", "Wannabe", "Poser", "Good Enough Gary".
   - between 50% and 80%: choose randomly from "Great!", "Sharpshooter", "Combat pilot", "Veteran"
   - between 80% and 100%: choose randomly from "Ace!", "Combat master", "Top gun", "Hunter"
+  - greater than 100% (this is possible with multi-projectile weapons like the cannon or the
+    shrapnel mines): display "Legend".
   - Font color: white.
   - The nickname is randomly chosen only once when moving between percentage categories.
     For example, if the hit rate is 100% and "Ace!" is selected, that nickname remains displayed 
@@ -236,6 +239,7 @@ The following weapons are available in the game:
 - Cannon (default weapon)
 - Laser beam
 - Ramming shield
+- Shrapnel mines
 
 Each weapon has three levels of power, which affects its abilities.
 Level 1 always begins with the Cannon on power level 1.
@@ -253,6 +257,7 @@ The icon's color and label are randomly selected from the following list:
 - White letter "C" on a yellow circle: this represents a Cannon powerup.
 - White letter "L" on a light blue circle: this represents a Laser powerup.
 - White letter "S" on a red circle: this represents a Shield powerup.
+- White letter "M" on a brown circle: this represents a Shrapnel Mine powerup.
 
 The icon drifts at a speed of 2 pixels per frame in a randomly chosen direction. 
 If the icon impacts an asteroid of any size outside of its grace period, the powerup icon is destroyed and removed from play.
@@ -313,7 +318,7 @@ Level 3: Increase projectile size to 4x4 pixels. Projectile color is now white. 
 to 8 pixels per frame. The player is allowed an unlimited number of projectiles in flight at this power level.
 Holding space does nothing - every press of the space bar spawns three projectiles.
 
-No reload indicator is displayed in the HUD for this weapon.
+No charge indicator is displayed in the HUD for this weapon.
 
 Note: due to screen wrapping, it is possible for a player's Cannon projectile to impact the player's own ship.
 This instantly transitions to Game Over Mode with the special additional message "FRIENDLY FIRE!". 
@@ -345,12 +350,14 @@ Level 3: Increase beam width to 3 pixels and beam length to 150 pixels, and chan
 Weapon discharge and recharge rates remain the same as level 2. Any asteroid impacted by this beam is
 immediately destroyed. This bypasses the usual asteroid split rules.
 
-A recharge indicator should be displayed in the HUD showing the laser's current charge as a light blue bar
+A charge indicator should be displayed in the HUD showing the laser's current charge as a light blue bar
 on a dark gray background, similar to a progress bar. 
 
 The laser beam at any power level instantly destroys an enemy UFO upon impact.
 
 Each laser activation counts as one "shot fired", regardless of how long the space bar is held.
+
+If the beam impacts a shrapnel mine, the mine detonates immediately and the laser is deactivated (same as an asteroid impact).
 
 If the laser successfully impacts any game object, the laser beam is deactivated, even if the user continues
 to hold the space bar. The laser does not recharge until the user releases the space bar. The current drain
@@ -381,15 +388,65 @@ Level 3: Increase shield border width to 4 pixels and increase shield radius to 
 changes to velocity = radius/10. Discharge rate and recharge rate remains the same as level 2. Any asteroid
 impacted by the shield at level 3 is immediately destroyed. This bypasses the usual asteroid split rules.
 
-A recharge indicator should be displayed in the HUD showing the shield's current charge as a red bar on a dark
+A charge indicator should be displayed in the HUD showing the shield's current charge as a red bar on a dark
 gray background, similar to a progress bar.
 
 The shield at any power level instantly destroys an enemy UFO upon impact. The same "bounce" rules apply as
 for an asteroid collision.
 
+If the shield impacts a shrapnel mine, the mine immediately detonates. The player craft is not damaged as a result.
+The same bounce rules apply as for an asteroid collision, using the mine's 12px radius for the velocity formula.
+
 Each shield activation counts as one "shot fired", regardless of how long the space bar is held.
 
 After shield bounce, always clamp player craft's speed to max speed of 8 pixels/frame.
+
+Mines do not have an expiry period. That is, once a mine is launched, it remains in play until the end of the current
+level, or until it detonates.
+
+### Shrapnel Mines
+
+Level 1: Pressing the space bar releases a single shrapnel mine from the rear of the ship. Shrapnel mines are
+12px radius circles with a white 2px border and a brown fill. A light gray "crosshair" is overlaid inside the circle,
+with one vertical line through the center, and one horizontal line through the center. This "crosshair" pulses every
+120 frames, changing from light gray to yellow for 5 frames, then back to light gray. Shrapnel mines have a starting
+velocity of the player craft's velocity plus backwards velocity of 2 pixels/frame. Shrapnel mines are subject to
+the same friction rules as the player's craft, meaning that they gradually slow until they become stationary. Shrapnel
+mines have a grace period of 90 frames after launch, during which time they cannot be activated. After the grace period
+expires, any object that approaches within 150 pixels (including the player's own craft!) will activate the mine.
+The crosshairs symbol changes to light red when the mine is activated, but the "pulsing" effect remains. That is,
+every 120 frames, the crosshair changes from light red to yellow for 5 frames, then back to light red. 180 frames 
+after being activated, the shrapnel mine explodes, releasing 8 level 1 cannon projectiles in an outward burst: north,
+northeast, east, southeast, south, southwest, west, and northwest. The mine is removed from play. The projectiles have the same appearance, movement, and collision detection rules as the player's level 1 cannon projectiles, except that they expire after
+500 pixels of travel distance, and they have no grace period. Only ONE shrapnel mine can be in play at a time at this power level. Pressing space with a mine currently in play does nothing. Holding the space bar does nothing - a maximum of one shrapnel mine
+is released per press of the space bar. 
+
+Level 2: the cap is raised from 1 to a maximum of 3 shrapnel mines in play at a time.
+
+Level 3: the cap is raised from 3 to a maximum of 5 shrapnel mines in play at a time. The appearance of the released
+projectiles changes from level 1 cannon projectiles to level 3 cannon projectiles. This increases their size and their
+speed to match the level 3 cannon, but mine projectiles still have a max 500px travel distance.
+
+Shrapnel mine explosions: use the same particle explosion effect as with enemy UFO explosions, except that the particle
+color should be brown.
+
+Shrapnel mines cannot be deactivated once activated.
+
+The activation delay can be shortened if the mine itself comes into contact with any other game object (see Collision Detection).
+Mines cannot be activated or detonated by other mines, but they CAN be activated by or collide with projectiles launched from other mines.
+
+No charge indicator is displayed in the HUD for this weapon.
+
+Shrapnel mines and their projectiles respect screen wrapping on all edges.
+
+At the end of each level, any undetonated shrapnel mines are removed from play.
+
+If the player craft collides with a shrapnel mine, or collides with any projectile launched from any shrapnel mine,
+this triggers an immediate Game Over with the special message "FRIENDLY FIRE - WATCH THOSE MINES!". Exception: if the
+player craft is equipped with the ramming shield, and the shield is active at the time of impact, the player craft
+takes no damage.
+
+Asteroids that are destroyed by a mine or by any mine projectile counts as a "hit" for scoring purposes.
 
 ### Weapon activation
 
@@ -398,12 +455,14 @@ After shield bounce, always clamp player craft's speed to max speed of 8 pixels/
 - Cannon: spawns at least one new projectile.
 - Laser: beam activates because charge is at least 20.
 - Shield: shield activates because charge is at least 20.
+- Mine: spawns at least one new shrapnel mine.
 
 Unsuccessful attempts do not count as activations:
 
 - Cannon: blocked by projectile cap
 - Laser: attempted activation blocked by insufficient charge
 - Shield: attempted activation blocked by insufficient charge
+- Mine: blocked by mine cap.
 
 ## Enemy UFOs
 
@@ -427,7 +486,8 @@ Every 1 minute of gameplay, spawn an enemy UFO:
 - UFO cannon projectiles CAN destroy powerup icons, outside of the icon's grace period.
 - UFO projectile collides with player's ship: instant game over with "HOSTILE FIRE!" special message.
   - exception: UFO projectiles cannot penetrate the ramming shield
-- Player weapon of any type collides with UFO: UFO is destroyed
+- Player weapon of any type collides with UFO: UFO is destroyed. If the collision was with a shrapnel mine, the
+  mine immediately detonates.
 - Player craft collides with enemy UFO: instant game over.
   - exception: if the shield is active, the enemy UFO is destroyed.
 
@@ -456,6 +516,9 @@ All game objects have simple bounding circles whose size is derived from the gam
 - Cannon projectiles: use the exact shape and size of the projectile for collision detection.
 - Enemy UFOs: a simple 60px radius circle extending from the center of the UFO (ignoring the oval shape).
 - Powerup icons: a simple bounding circle whose radius matches the icon's radius.
+- Mines: have a collision radius based on their drawn radius. Contact with any game object triggers immediate
+  explosion. Also have an invisible "activation radius" with a fixed 150px value. Any game object entering that
+  radius activates the mine. The 150px activation radius respects screen wrapping.
 
 Example: the center of the player's craft comes within 60px of the center of a 40px radius asteroid. This
 counts as a collision, because the craft's 20px bounding circle now intersects the asteroids 40px bounding circle.
@@ -473,6 +536,18 @@ starting from the tip of the player's craft and moving along the facing directio
 bounds, check for collisions, and stop at the first hit.
 
 The ramming shield has a simple circular bounding circle with a radius equal to the shield's own radius.
+
+Shrapnel mines have an invisible 150px "activation radius". Any game object (UFOs, player craft, asteroids, or
+projectiles of any type) that enters that radius activates the mine, starting its detonation countdown. Shrapnel
+mines also have a collision radius equal to their drawn radius. Any game object that collides with the mine
+bypasses the mine's activation countdown and triggers an immediate mine explosion.
+
+There is one exception to mine activation and detonation: shrapnel mines cannot be activated by other shrapnel
+mines! Two or more shrapnel mines can exist inside each other's activation radius without triggering an activation.
+Shrapnel mines also have no collision detection with each other! They pass through each other. However, the projectiles
+that are released from a shrapnel mine have the same collision detection rules as any other projectile. This means
+that a shrapnel mine CAN collide with another shrapnel mine's projectiles. This triggers an immediate explosion.
+This also means that shrapnel mines CAN be activated by proximity to projectiles launched from another shrapnel mine.
 
 ## Thrusters
 
@@ -560,6 +635,7 @@ spawn an immediate powerup at a random screen location (never within 200px of th
 - press 'C' to spawn a Cannon powerup (no cap)
 - press 'L' to spawn a Laser powerup (no cap)
 - press 'S' to spawn a shield powerup (no cap)
+- press 'M' to spawn a shrapnel mine powerup (no cap)
 - press 'U' to spawn an enemy UFO (if not already at UFO cap)
 
 There are no limits to the number of powerup icons you can spawn at any time. Only 3 enemy UFOs can
@@ -591,15 +667,18 @@ If `--debug` is not specified, these keys do nothing.
   Game scoring and the HUD should be implemented at this stage.
   Implement the "BEGIN LEVEL N" fade-out text at the start of each level.
   Implement level advancement (adjusting asteroid specs per level advancement rules).
-- Stage 5: implement remaining weapon types and powerup icon spawning. The player should be able
-  to switch and upgrade weapons by collecting powerup icons. Implement `--debug` mode now to
-  make testing easier. Implement weapon collision detection for the laser and the shield.
+- Stage 5: implement powerup icons, the laser, and the ramming shield. (Shrapnel mines deferred for now).
+  The player should be able to switch and upgrade weapons by collecting powerup icons.
+  Implement `--debug` mode now to make testing easier. Implement weapon collision detection 
+  for the laser and the shield.
 - Stage 6: implement enemy UFOs and UFO projectiles. Update collision detection code accordingly.
 - Stage 7: implement audio using the contents of the `sfx` subdirectory. Implement the `F2` toggle.
   Add the `--nosound` command line option that overrides the default audio state on startup.
 - Stage 8: cosmetic effects, such as the starfield background, thruster flame effect, and
   particle explosions can be implemented now. There should be no changes needed to collision
   detection in this stage.
+- Stage 9: implement shrapnel mines. Implement mine activation and detonation rules. Add shrapnel
+  mine powerup icons and mine upgrades.
 
 ### Per-stage verification
 
@@ -632,6 +711,7 @@ WHITE = (255, 255, 255)
 RED = (255, 0, 0)
 YELLOW = (255, 255, 0)
 ORANGE = (255, 165, 0)
+BROWN = (139, 69, 19)
 LIGHT_BLUE = (173, 216, 230)
 CYAN = (0, 255, 255)
 LIGHT_RED = (255, 127, 127)
