@@ -51,6 +51,7 @@ import pygame
 
 from entities import (PlayerCraft, player_hits_asteroid,
                       player_hits_ufo, ShrapnelMine, spawn_level_asteroids, spawn_ufo)
+from entities.fuelpod import FuelPod
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
 from effects.particles import (spawn_destruction_explosion,
@@ -65,6 +66,10 @@ from game_constants import (
     DEBUG_SPAWN_ATTEMPTS,
     FPS,
     FRIENDLY_FIRE_MESSAGE,
+    FUEL_LEVEL_BONUS,
+    FUEL_MAX,
+    FUEL_PICKUP_AMOUNT,
+    FUEL_POD_DROP_CHANCE,
     HEADING_FONT_SIZE,
     HOSTILE_FIRE_MESSAGE,
     LASER_SAMPLE_STEP,
@@ -131,7 +136,9 @@ class GameState(GameModeState):
         self._ufo_projectiles: list = []
         self._mines: list = []
         self._powerups: list = []
+        self._fuel_pods: list = []
         self._ufos: list = []
+        self._fuel = FUEL_MAX
         # Cosmetic-only particles (explosion debris, thruster puffs). They
         # have no collision role, so they are a simple last-in list and get
         # swept at the same point as every other transient object
@@ -185,11 +192,14 @@ class GameState(GameModeState):
         self._ufo_projectiles = []
         self._mines = []
         self._powerups = []
+        self._fuel_pods = []
         self._ufos = []
         # Cosmetic debris of the level just left behind dies with it
         # (spec: "all explosion particles, powerup icons, thruster exhaust
         # circles, projectiles, and enemy UFOs are removed").
         self._particles = []
+        # Fuel bonus at end of level
+        self._fuel = min(FUEL_MAX, self._fuel + FUEL_LEVEL_BONUS)
         # Re-arming a still-held space bar would require a fresh press on
         # re-activation anyway, so the hold state is cleared as well.
         self._space_held = False
@@ -333,7 +343,12 @@ class GameState(GameModeState):
         # Live window size keeps every wrap correct right after a resize
         # (the spec's "forced screen wrap" requirement).
         width, height = self.app.screen.get_size()
-        thrusting, turning = self._craft_intents()
+        thrusting_intent, turning = self._craft_intents()
+        # Fuel consumption: thrust only works if fuel > 0
+        can_thrust = self._fuel > 0
+        thrusting = thrusting_intent and can_thrust
+        if thrusting:
+            self._fuel = max(0, self._fuel - 1)
         self._craft.update(thrusting, turning, width, height)
         self._sync_sound_loops(thrusting)
         if thrusting:
@@ -358,6 +373,8 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y, width, height))
         for powerup in self._powerups:
             powerup.update(width, height)
+        for fuel_pod in self._fuel_pods:
+            fuel_pod.update(width, height)
         # Update mines: move, friction, grace, activation timer. Remove
         # mines that have detonated (update returns False).
         live_mines = []
@@ -447,8 +464,11 @@ class GameState(GameModeState):
         if self._resolve_craft_deaths(width, height):
             return
         self._collect_powerups(width, height)
+        self._collect_fuel_pods(width, height)
         self._resolve_powerup_asteroid_hits(width, height)
+        self._resolve_fuelpod_asteroid_hits(width, height)
         self._resolve_ufo_powerup_steals(width, height)
+        self._resolve_ufo_fuelpod_steals(width, height)
         if not self._asteroids:
             self._advance_level()
 
@@ -548,6 +568,16 @@ class GameState(GameModeState):
                 # or hit is recorded - an impact, not an activation.
                 self._destroy_powerup(powerup)
                 continue
+            fuel_pod = next(
+                (f for f in self._fuel_pods
+                 if not f.in_grace
+                 and projectile.hits_circle(f.x, f.y, f.radius,
+                                            width, height)),
+                None,
+            )
+            if fuel_pod is not None:
+                self._destroy_fuelpod(fuel_pod)
+                continue
             ufo = next(
                 (u for u in self._ufos
                  if projectile.hits_circle(u.x, u.y, u.radius,
@@ -624,6 +654,17 @@ class GameState(GameModeState):
                 self._destroy_powerup(powerup)
                 weapon.deactivate_after_hit()
                 return
+            fuel_pod = next(
+                (f for f in self._fuel_pods
+                 if not f.in_grace
+                 and torus_distance(sx, sy, f.x, f.y, width, height)
+                 <= f.radius),
+                None,
+            )
+            if fuel_pod is not None:
+                self._destroy_fuelpod(fuel_pod)
+                weapon.deactivate_after_hit()
+                return
             ufo = next(
                 (u for u in self._ufos
                  if torus_distance(sx, sy, u.x, u.y, width, height)
@@ -693,6 +734,17 @@ class GameState(GameModeState):
             else:
                 survivors.append(powerup)
         self._powerups = survivors
+        # Fuel pods touching the ring outside grace are destroyed
+        fuel_survivors = []
+        for pod in self._fuel_pods:
+            if (not pod.in_grace
+                    and pod.overlaps_circle(
+                        self._craft.x, self._craft.y, weapon.shield_radius,
+                        width, height)):
+                self._destroy_fuelpod(pod)
+            else:
+                fuel_survivors.append(pod)
+        self._fuel_pods = fuel_survivors
 
     def _shield_rams_asteroid(self, weapon: RammingShield,
                               width: int, height: int) -> bool:
@@ -785,6 +837,16 @@ class GameState(GameModeState):
             if powerup is not None:
                 self._destroy_powerup(powerup)
                 continue
+            fuel_pod = next(
+                (f for f in self._fuel_pods
+                 if not f.in_grace
+                 and projectile.hits_circle(f.x, f.y, f.radius,
+                                             width, height)),
+                None,
+            )
+            if fuel_pod is not None:
+                self._destroy_fuelpod(fuel_pod)
+                continue
             if shield_up and projectile.hits_circle(
                     self._craft.x, self._craft.y, self._weapon.shield_radius,
                     width, height):
@@ -866,6 +928,15 @@ class GameState(GameModeState):
                         <= ufo.radius + powerup.radius):
                     self._destroy_powerup(powerup)
 
+    def _resolve_ufo_fuelpod_steals(self, width: int, height: int) -> None:
+        """UFOs steal fuel pods on contact, even during grace."""
+        for ufo in self._ufos:
+            for pod in list(self._fuel_pods):
+                if (torus_distance(ufo.x, ufo.y, pod.x, pod.y,
+                                   width, height)
+                        <= ufo.radius + pod.radius):
+                    self._destroy_fuelpod(pod)
+
     # ------------------------------------------------------- asteroid impacts
 
     def _apply_asteroid_impact(self, asteroid, score: bool,
@@ -902,6 +973,9 @@ class GameState(GameModeState):
                 impact_point[0], impact_point[1], asteroid.radius))
         if random.random() < self._powerup_drop_chance():
             self._powerups.append(spawn_drop_powerup(asteroid.x, asteroid.y))
+            self.app.sound.play(SFX_POWERUP_SPAWN)
+        if random.random() < FUEL_POD_DROP_CHANCE:
+            self._fuel_pods.append(FuelPod(asteroid.x, asteroid.y))
             self.app.sound.play(SFX_POWERUP_SPAWN)
         return children
 
@@ -961,6 +1035,18 @@ class GameState(GameModeState):
                 survivors.append(powerup)
         self._powerups = survivors
 
+    def _collect_fuel_pods(self, width: int, height: int) -> None:
+        """Collect fuel pods: add fuel on contact, even during grace period."""
+        survivors = []
+        for pod in self._fuel_pods:
+            if pod.overlaps_circle(self._craft.x, self._craft.y,
+                                   PLAYER_RADIUS, width, height):
+                self._fuel = min(FUEL_MAX, self._fuel + FUEL_PICKUP_AMOUNT)
+                self.app.sound.play(SFX_POWERUP_COLLECTED)
+            else:
+                survivors.append(pod)
+        self._fuel_pods = survivors
+
     def _resolve_powerup_asteroid_hits(self, width: int, height: int) -> None:
         """A drifting out-of-grace icon touching an asteroid is destroyed,
         and the asteroid splits/destroys per the normal impact rules -
@@ -993,6 +1079,32 @@ class GameState(GameModeState):
                     asteroid, score=False, destroy_outright=False,
                     impact_point=impacted_rocks[id(asteroid)]))
 
+    def _resolve_fuelpod_asteroid_hits(self, width: int, height: int) -> None:
+        """Fuel pods colliding with asteroids (out of grace) are destroyed,
+        and the asteroid splits/destroys without scoring."""
+        consumed_pods: set = set()
+        impacted_rocks: dict = {}
+        for pod in self._fuel_pods:
+            if pod.in_grace:
+                continue
+            for asteroid in self._asteroids:
+                if id(asteroid) in impacted_rocks:
+                    continue
+                if pod.overlaps_circle(asteroid.x, asteroid.y,
+                                       asteroid.radius, width, height):
+                    consumed_pods.add(id(pod))
+                    impacted_rocks[id(asteroid)] = (pod.x, pod.y)
+                    break
+        for pod in self._fuel_pods:
+            if id(pod) in consumed_pods:
+                self._destroy_fuelpod(pod)
+        for asteroid in list(self._asteroids):
+            if id(asteroid) in impacted_rocks:
+                self._asteroids.remove(asteroid)
+                self._asteroids.extend(self._apply_asteroid_impact(
+                    asteroid, score=False, destroy_outright=False,
+                    impact_point=impacted_rocks[id(asteroid)]))
+
     def _destroy_powerup(self, powerup) -> None:
         """Remove an icon from play regardless of the cause (projectile,
         beam, shield, drifting rock, stolen by a UFO). The destruction cue
@@ -1002,6 +1114,14 @@ class GameState(GameModeState):
             self.app.sound.play(SFX_POWERUP_DESTROYED)
         except ValueError:
             pass  # already consumed by another collision this frame
+
+    def _destroy_fuelpod(self, pod) -> None:
+        """Remove a fuel pod from play. Destruction cue same as powerup."""
+        try:
+            self._fuel_pods.remove(pod)
+            self.app.sound.play(SFX_POWERUP_DESTROYED)
+        except ValueError:
+            pass
 
     # ----------------------------------------------------------------- view
 
@@ -1025,6 +1145,8 @@ class GameState(GameModeState):
         if self._phase == self.PHASE_PLAYING:
             for powerup in self._powerups:
                 powerup.draw(screen)
+            for pod in self._fuel_pods:
+                pod.draw(screen)
             for ufo in self._ufos:
                 ufo.draw(screen)
             for mine in self._mines:
@@ -1068,6 +1190,7 @@ class GameState(GameModeState):
             power_level=self._weapon.power(),
             sound_on=self.app.sound_on,
             game_time_seconds=self._game_time_frames // FPS,
+            fuel=self._fuel,
             charge_fraction=charge_fraction,
             charge_color=charge_color,
         )

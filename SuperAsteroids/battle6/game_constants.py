@@ -40,6 +40,8 @@ GRAY = (128, 128, 128)
 BROWN = (139, 69, 19)
 ASTEROID_MIN_FILL = 72                         # 72,72,72  (random asteroid fills)
 ASTEROID_MAX_FILL = 152                        # 152,152,152
+FUEL_BAR_FG = (0, 255, 0)                       # bright green
+FUEL_BAR_BG = (0, 64, 0)                        # dark green
 
 # --------------------------------------------------------------------- fonts
 # Pixel sizes for pygame's built-in font.
@@ -193,6 +195,19 @@ POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
 # level; level 5+ clamps to the last entry (1%).
 POWERUP_DROP_CHANCES = (0.08, 0.06, 0.04, 0.02, 0.01)
 
+# ------------------------------------------------------------------ fuel
+FUEL_MAX = 600
+FUEL_CONSUMPTION_PER_FRAME = 1
+FUEL_PICKUP_AMOUNT = 60
+FUEL_LEVEL_BONUS = 120
+FUEL_POD_DROP_CHANCE = 0.02
+FUEL_POD_SIZE = 20
+FUEL_POD_CORNER_RADIUS = 6
+FUEL_POD_BORDER_WIDTH = 4
+FUEL_POD_COLLISION_RADIUS = 12
+FUEL_POD_SPEED = 2
+FUEL_POD_GRACE = 90
+
 # --------------------------------------------------------------------- UFO
 # Per the spec ("Enemy UFOs"): a hostile that drifts in a straight line,
 # deflects periodically, and fires at the craft. Every timer here is counted
@@ -261,7 +276,7 @@ THRUSTER_COLORS = (YELLOW, ORANGE, RED)      # one, random per puff
 # Upper-right HUD (spec: "Heads-up display"). Everything is drawn at a single
 # ~60% opacity (alpha 153) on a transparent surface.
 HUD_WIDTH = 200
-HUD_HEIGHT = 200
+HUD_HEIGHT = 220
 HUD_MARGIN = 10
 HUD_CORNER_RADIUS = 12
 HUD_BORDER_WIDTH = 4

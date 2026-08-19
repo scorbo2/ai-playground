@@ -15,6 +15,8 @@ from font_manager import get_font
 from game_constants import (
     CYAN,
     DARK_GRAY,
+    FUEL_BAR_BG,
+    FUEL_BAR_FG,
     GREEN,
     HUD_ALPHA,
     HUD_BORDER_WIDTH,
@@ -48,6 +50,7 @@ class HudData:
     power_level: int
     sound_on: bool
     game_time_seconds: int
+    fuel: int
     charge_fraction: Optional[float] = None
     charge_color: Optional[tuple] = None
 
@@ -98,8 +101,9 @@ def draw_game_hud(screen: pygame.Surface, data: HudData) -> None:
     )
     available_width = HUD_WIDTH - 2 * HUD_TEXT_PADDING
     has_charge = data.charge_fraction is not None
-    y = (HUD_HEIGHT - (len(text_lines) + (1 if has_charge else 0))
-         * HUD_LINE_SPACING) // 2
+    # Fuel bar is always present and occupies one line slot
+    total_lines = len(text_lines) + (1 if has_charge else 0) + 1
+    y = (HUD_HEIGHT - total_lines * HUD_LINE_SPACING) // 2
     for index, (text, color) in enumerate(text_lines):
         surface.blit(_fit_render(text, color, available_width),
                      (HUD_TEXT_PADDING, y))
@@ -111,6 +115,9 @@ def draw_game_hud(screen: pygame.Surface, data: HudData) -> None:
             _draw_charge_bar(surface, y, data.charge_fraction,
                              data.charge_color, available_width)
             y += HUD_LINE_SPACING
+
+    # Fuel bar is always the last line
+    _draw_fuel_bar(surface, y, data.fuel, available_width)
 
     surface.set_alpha(HUD_ALPHA)
     screen.blit(surface, rect.topleft)
@@ -130,5 +137,24 @@ def _draw_charge_bar(surface: pygame.Surface, y: int, fraction: float,
     fill_width = int(round((outer.width - 2) * max(0.0, min(1.0, fraction))))
     if fill_width > 0:
         pygame.draw.rect(surface, color,
+                         (outer.x + 1, outer.y + 1, fill_width,
+                          outer.height - 2))
+
+
+def _draw_fuel_bar(surface: pygame.Surface, y: int, fuel: int,
+                   available_width: int) -> None:
+    """Fuel gauge line: white 'Fuel:' label with bright green bar on dark green."""
+    from game_constants import FUEL_MAX
+    label = _fit_render("Fuel:", WHITE, available_width)
+    surface.blit(label, (HUD_TEXT_PADDING, y))
+    bar_x = HUD_TEXT_PADDING + label.get_width() + 4
+    bar_width = max(10, available_width - label.get_width() - 4)
+    bar_y = y + (HUD_LINE_SPACING - HUD_CHARGE_BAR_HEIGHT) // 2
+    outer = pygame.Rect(bar_x, bar_y, bar_width, HUD_CHARGE_BAR_HEIGHT)
+    pygame.draw.rect(surface, FUEL_BAR_BG, outer)
+    fraction = max(0.0, min(1.0, fuel / FUEL_MAX))
+    fill_width = int(round((outer.width - 2) * fraction))
+    if fill_width > 0:
+        pygame.draw.rect(surface, FUEL_BAR_FG,
                          (outer.x + 1, outer.y + 1, fill_width,
                           outer.height - 2))
