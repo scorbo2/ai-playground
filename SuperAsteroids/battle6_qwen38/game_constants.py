@@ -189,7 +189,7 @@ MINE_BACK_LAUNCH_SPEED = 2
 MINE_ACTIVATION_RADIUS = 150
 MINE_GRACE = 90                        # frames with no activation (all objects)
                                        # and no self-collision (craft only)
-MINE_DETONATION_DELAY = 180            # frames from activation to explosion
+MINE_DETONATION_DELAY = 60             # frames from activation to explosion
 # Detonation: an outward burst of cannon-style projectiles (N,NE,E,SE,S,SW,W,
 # NW) plus a 100-particle brown explosion (same count as a UFO, spec).
 MINE_BURST_ANGLE_STEP = 45             # 8 compass points, 45 deg apart
