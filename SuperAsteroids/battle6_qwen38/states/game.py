@@ -325,6 +325,8 @@ class GameState(GameModeState):
             self._spawn_debug_powerup("Shield")
         elif key == pygame.K_m:
             self._spawn_debug_powerup("Shrapnel mines")
+        elif key == pygame.K_f:
+            self._spawn_debug_fuel_pod()
         elif key == pygame.K_u:
             self._spawn_debug_ufo()
 
@@ -341,6 +343,15 @@ class GameState(GameModeState):
         x, y = self._debug_spawn_point(width, height)
         self._powerups.append(Powerup(x, y, weapon_name))
         # A powerup icon has appeared - cheat or not, the same cue applies.
+        self.app.sound.play(SFX_POWERUP_SPAWN)
+
+    def _spawn_debug_fuel_pod(self) -> None:
+        # Like the powerup cheats: no cap, safe-distance placement, and the
+        # same spawn cue (sfx/README defines it for "a powerup icon or
+        # fuel pod").
+        width, height = self.app.screen.get_size()
+        x, y = self._debug_spawn_point(width, height)
+        self._fuel_pods.append(spawn_fuel_pod(x, y))
         self.app.sound.play(SFX_POWERUP_SPAWN)
 
     def _debug_spawn_point(self, width: int, height: int) -> tuple:

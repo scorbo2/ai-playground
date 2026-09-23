@@ -47,7 +47,7 @@ class SuperAsteroidsApp:
                  sound_on: bool = True):
         self.test_mode = test_mode
         # --debug (spec: "Debug option"): enables cheat hotkeys in Game
-        # Mode (C/L/S powerups, U for a UFO).
+        # Mode (C/L/S/M powerups, F for a fuel pod, U for a UFO).
         self.debug_mode = debug_mode
         # Mixer config made explicit, pre_init BEFORE pygame.init(). The
         # values match pygame's defaults and the shipped WAV format (see

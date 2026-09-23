@@ -277,9 +277,9 @@ UFO_PROJECTILE_DISTANCE = 500          # half of the player's level 1 range
 HOSTILE_FIRE_MESSAGE = "HOSTILE FIRE!"
 
 # -------------------------------------------------------------------- debug
-# --debug hotkeys: C/L/S spawn a powerup of that type (no cap), U spawns a
-# UFO if under the active cap. Spawned powerup positions avoid the craft's
-# safe distance.
+# --debug hotkeys: C/L/S/M spawn a powerup of that type (no cap), F spawns a
+# fuel pod (no cap), U spawns a UFO if under the active cap. Spawned powerup
+# and pod positions avoid the craft's safe distance.
 DEBUG_SPAWN_ATTEMPTS = 50
 
 # -------------------------------------------------------------- level intro
