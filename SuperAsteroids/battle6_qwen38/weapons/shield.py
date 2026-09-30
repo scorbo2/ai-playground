@@ -19,6 +19,7 @@ from game_constants import (
     SHIELD_DRAIN,
     SHIELD_RADII,
     SHIELD_RECHARGE,
+    ORANGE,
     RED,
 )
 from weapons.base import ChargedWeapon
@@ -53,9 +54,14 @@ class RammingShield(ChargedWeapon):
         """Power 3 bypasses the usual split rules (spec)."""
         return self.power() >= 3
 
+    @property
+    def shield_color(self) -> tuple:
+        """Orange at power 5, red otherwise."""
+        return ORANGE if self.power() >= 5 else RED
+
     def draw(self, screen: pygame.Surface, craft) -> None:
         if not self.firing:
             return
-        pygame.draw.circle(screen, RED,
+        pygame.draw.circle(screen, self.shield_color,
                            (int(round(craft.x)), int(round(craft.y))),
                            int(self.shield_radius), width=self.border_width)

@@ -37,7 +37,7 @@ class ShrapnelMines(Weapon):
 
     def on_press(self, craft, mines_in_play) -> bool:
         cap = MINE_LEVEL_SPECS[self.index()][0]
-        if len(mines_in_play) >= cap:
+        if cap is not None and len(mines_in_play) >= cap:
             return False  # at the in-play cap: NOT a shot (spec: Weapons)
         mines_in_play.append(self._launch(craft))
         return True

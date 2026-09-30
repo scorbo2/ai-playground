@@ -57,8 +57,8 @@ SFX_UFO_DESTROYED = "ufo_destroyed"
 SFX_THRUSTERS = "thrusters"
 
 # Cannon/laser fire sounds are indexed by the weapon's 0-based power level.
-SFX_CANNON_BY_LEVEL = (SFX_CANNON_L1, SFX_CANNON_L2, SFX_CANNON_L3)
-SFX_LASER_BY_LEVEL = (SFX_LASER_L1, SFX_LASER_L2, SFX_LASER_L3)
+SFX_CANNON_BY_LEVEL = (SFX_CANNON_L1, SFX_CANNON_L2, SFX_CANNON_L3, SFX_CANNON_L3, SFX_CANNON_L3)
+SFX_LASER_BY_LEVEL = (SFX_LASER_L1, SFX_LASER_L2, SFX_LASER_L3, SFX_LASER_L3, SFX_LASER_L3)
 
 # Every sound the manager loads at startup. Anything missing from sfx/ is
 # skipped with a warning (spec: load failures are not fatal).

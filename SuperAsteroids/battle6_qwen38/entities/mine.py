@@ -28,6 +28,7 @@ import math
 import pygame
 
 from game_constants import (
+    MAX_WEAPON_POWER,
     MINE_ACTIVATION_RADIUS,
     MINE_CROSSHAIR_ACTIVE,
     MINE_CROSSHAIR_IDLE,
@@ -58,8 +59,11 @@ class ShrapnelMine:
         # The weapon power level that launched this mine, kept on the mine so
         # its detonation still bursts the right projectiles even if the player
         # has switched weapons in the meantime (spec: power level is fixed at
-        # launch, not read from the current weapon).
-        self.power_level = max(1, min(3, power_level))
+        # launch, not read from the current weapon). The clamp tracks
+        # MAX_WEAPON_POWER (not a literal) so adding power levels later
+        # cannot silently truncate stored mine power the way the old
+        # hard-coded 3 did.
+        self.power_level = max(1, min(MAX_WEAPON_POWER, power_level))
         self.radius = MINE_RADIUS
         self.activation_radius = MINE_ACTIVATION_RADIUS
         # Two independent clocks: the launch grace (no activation by anyone,

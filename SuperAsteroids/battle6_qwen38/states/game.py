@@ -106,6 +106,7 @@ from game_constants import (
     FRIENDLY_FIRE_MESSAGE,
     FUEL_LEVEL_END_BONUS,
     FUEL_MAX,
+    FUEL_MAX_POWER_REGEN_PER_FRAME,
     FUEL_POD_DROP_CHANCE,
     FUEL_POD_PICKUP,
     HEADING_FONT_SIZE,
@@ -406,6 +407,9 @@ class GameState(GameModeState):
             # resulting one-frame offset is deliberate and unperceptible.
             # Purely cosmetic: no collision, no wrap.
             self._particles.extend(spawn_thruster_puffs(self._craft))
+        elif self._weapon.power() >= 5:
+            # Max-power perk: passive fuel regen when not thrusting.
+            self._craft.add_fuel(FUEL_MAX_POWER_REGEN_PER_FRAME)
         for asteroid in self._asteroids:
             asteroid.update(width, height)
         for projectile in self._projectiles:
@@ -955,6 +959,8 @@ class GameState(GameModeState):
         """
         shield_up = (isinstance(self._weapon, RammingShield)
                      and self._weapon.firing)
+        mine_immune = (isinstance(self._weapon, ShrapnelMines)
+                       and self._weapon.power() >= 5)
         live = list(self._asteroids)
         replacements: list = []
         survivors: list = []
@@ -1006,6 +1012,10 @@ class GameState(GameModeState):
                     self._craft.x, self._craft.y,
                     self._weapon.shield_radius, width, height):
                 continue  # absorbed by the raised shield
+            if mine_immune and projectile.hits_circle(
+                    self._craft.x, self._craft.y,
+                    PLAYER_RADIUS, width, height):
+                continue  # level-5 mines: player is immune to own burst shots
             if projectile.hits_circle(self._craft.x, self._craft.y,
                                       PLAYER_RADIUS, width, height):
                 self.app.to_game_over(MINE_FRIENDLY_FIRE_MESSAGE)

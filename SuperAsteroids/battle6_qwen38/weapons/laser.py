@@ -17,6 +17,7 @@ from game_constants import (
     LASER_SAMPLE_STEP,
     LASER_WIDTHS,
     LIGHT_BLUE,
+    ORANGE,
     PLAYER_SHAPE_HEIGHT,
     WHITE,
 )
@@ -47,7 +48,9 @@ class Laser(ChargedWeapon):
 
     @property
     def beam_color(self) -> tuple:
-        # Spec: white only at power 3.
+        # Spec: orange at power 5, white at power 3-4, light blue otherwise.
+        if self.power() >= 5:
+            return ORANGE
         return WHITE if self.power() >= 3 else LIGHT_BLUE
 
     def destroys_on_hit(self) -> bool:

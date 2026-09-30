@@ -116,10 +116,10 @@ PLAYER_STALL_SPEED = 0.05              # px/frame; below this, speed snaps to 0
 
 # ------------------------------------------------------------- weapon system
 # Shared by the charged weapons (Laser + Ramming Shield): 100 units of
-# charge, activation blocked below 20, power levels capped at 3.
+# charge, activation blocked below 20, power levels capped at 4.
 WEAPON_CHARGE_MAX = 100
 WEAPON_MIN_ACTIVATE_CHARGE = 20
-MAX_WEAPON_POWER = 3
+MAX_WEAPON_POWER = 5
 
 # --------------------------------------------------------------------- cannon
 CANNON_PROJECTILE_SIZE = 2             # px: projectiles are 2x2 square blocks
@@ -129,6 +129,9 @@ CANNON_PROJECTILE_DISTANCE = 1000      # px cumulative travel before expiring
 CANNON_MAX_PROJECTILES_L1 = 3          # in-flight cap at power level 1
 CANNON_PROJECTILE_SIZE_L3 = 4          # px: level 3 projectiles are 4x4 blocks
 CANNON_PROJECTILE_SPEED_L3 = 8         # px/frame (levels 1-2 stay at 6)
+CANNON_PROJECTILE_SIZE_L4 = 6          # px: level 4 projectiles are 6x6 blocks (+2 from L3)
+CANNON_PROJECTILE_SPEED_L4 = 10        # px/frame (+2 from L3)
+CANNON_PROJECTILE_SIZE_L5 = 8          # px: level 5 projectiles are 8x8 blocks (+2 from L4)
 CANNON_ARC_DEGREES_L2 = 20             # the 3-shot fan, levels 2 and 3
 CANNON_MAX_PROJECTILES_L2 = 9          # in-flight cap at power level 2
 # One row per power level (index = power_level - 1):
@@ -143,6 +146,10 @@ CANNON_LEVEL_SPECS = (
      ORANGE, CANNON_MAX_PROJECTILES_L2),
     (3, CANNON_ARC_DEGREES_L2, CANNON_PROJECTILE_SIZE_L3,
      CANNON_PROJECTILE_SPEED_L3, WHITE, None),
+    (3, CANNON_ARC_DEGREES_L2, CANNON_PROJECTILE_SIZE_L4,
+     CANNON_PROJECTILE_SPEED_L4, CYAN, None),
+    (3, CANNON_ARC_DEGREES_L2, CANNON_PROJECTILE_SIZE_L5,
+     CANNON_PROJECTILE_SPEED_L4, ORANGE, None),
 )
 CANNON_SELF_GRACE = 30                 # frames a projectile cannot hit its own craft
 FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE!"
@@ -150,20 +157,23 @@ FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE!"
 # -------------------------------------------------------------------- laser
 # One tuple per power level (index = power_level - 1). Level 3 keeps level 2's
 # drain/recharge rates and goes white (the beam color is derived in Laser).
-LASER_WIDTHS = (1, 2, 3)               # px
-LASER_LENGTHS = (100, 125, 150)        # px, from the craft's tip
-LASER_DRAIN = (3, 2, 2)                # charge units/frame while the key is held
-LASER_RECHARGE = (1, 2, 2)             # charge units/frame once released
+# Level 4 extends the beam to 200 px; level 5 extends to 250 px and turns orange.
+LASER_WIDTHS = (1, 2, 3, 4, 5)         # px
+LASER_LENGTHS = (100, 125, 150, 200, 250)  # px, from the craft's tip
+LASER_DRAIN = (3, 2, 2, 2, 2)          # charge units/frame while the key is held
+LASER_RECHARGE = (1, 2, 2, 2, 2)       # charge units/frame once released
 LASER_SAMPLE_STEP = 2                  # px per collision sample (spec suggestion)
 
 # ------------------------------------------------------------------- shield
-SHIELD_RADII = (35, 35, 40)            # px around the craft
-SHIELD_BORDER_WIDTHS = (1, 2, 4)       # px
-SHIELD_DRAIN = (5, 3, 3)               # charge units/frame while the key is held
-SHIELD_RECHARGE = (1, 3, 3)            # charge units/frame once released
+# Level 4: radius 50 px (+10 from L3), drain 2 units/frame (-1 from L3).
+# Level 5: radius 60 px (+10 from L4), turns orange; other stats unchanged.
+SHIELD_RADII = (35, 35, 40, 50, 60)    # px around the craft
+SHIELD_BORDER_WIDTHS = (1, 2, 4, 5, 6) # px
+SHIELD_DRAIN = (5, 3, 3, 2, 2)         # charge units/frame while the key is held
+SHIELD_RECHARGE = (1, 3, 3, 3, 3)      # charge units/frame once released
 # Ramming bounce speed = impacting radius / divisor (spec: 40 px rock at
 # level 1 -> 40/5 = 8 px/frame, the craft's max speed).
-SHIELD_BOUNCE_DIVISORS = (5, 8, 10)
+SHIELD_BOUNCE_DIVISORS = (5, 8, 10, 10, 10)
 
 # ----------------------------------------------------------------- shrapnel mines
 # A mine is dropped from the craft's rear, coasts to a stop under the craft's
@@ -206,6 +216,9 @@ MINE_LEVEL_SPECS = (
     (1, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED, YELLOW),
     (3, CANNON_PROJECTILE_SIZE, CANNON_PROJECTILE_SPEED, YELLOW),
     (5, CANNON_PROJECTILE_SIZE_L3, CANNON_PROJECTILE_SPEED_L3, WHITE),
+    (None, CANNON_PROJECTILE_SIZE_L4, CANNON_PROJECTILE_SPEED_L4, CYAN),
+    # Level 5: no cap, same burst as L4, player is immune to own mine projectiles.
+    (None, CANNON_PROJECTILE_SIZE_L4, CANNON_PROJECTILE_SPEED_L4, CYAN),
 )
 MINE_FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE - WATCH THOSE MINES!"
 
@@ -240,6 +253,9 @@ FUEL_MAX = 600                             # units, a fresh game's tank
 FUEL_CONSUMPTION_PER_FRAME = 1             # per thrusting frame
 FUEL_LEVEL_END_BONUS = 120                 # added on every level advance (clamped)
 FUEL_POD_PICKUP = 60                       # added per pod collected (clamped)
+# Passive regen granted when the player holds any weapon at power level 5.
+# 5 units/second at 60 FPS = 1/12 unit per frame.
+FUEL_MAX_POWER_REGEN_PER_FRAME = 5 / 60   # units/frame, capped at FUEL_MAX
 # Independent per-event roll, applied to EVERY asteroid split or
 # destruction event, whatever delivered the hit (spec: Fuel).
 FUEL_POD_DROP_CHANCE = 0.02
