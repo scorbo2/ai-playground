@@ -49,6 +49,10 @@ class CannonProjectile:
         return self.size / 2
 
     @property
+    def octo_size(self) -> float:
+        return self.size * 8
+
+    @property
     def can_hit_player(self) -> bool:
         """Only false during the spawn grace window (spec: prevents
         immediate self-kills while still allowing asteroid impacts)."""
@@ -72,7 +76,7 @@ class CannonProjectile:
                     width: int, height: int) -> bool:
         """Does this block intersect a bounding circle (asteroid, craft)?"""
         return wrapped_circle_hits_box(cx, cy, radius, self.x, self.y,
-                                       self.half_size, self.half_size,
+                                       self.octo_size, self.octo_size,
                                        width, height)
 
     def draw(self, screen: pygame.Surface) -> None:
