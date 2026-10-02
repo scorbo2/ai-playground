@@ -167,8 +167,8 @@ LASER_SAMPLE_STEP = 2                  # px per collision sample (spec suggestio
 # ------------------------------------------------------------------- shield
 # Level 4: radius 50 px (+10 from L3), drain 2 units/frame (-1 from L3).
 # Level 5: radius 60 px (+10 from L4), turns orange; other stats unchanged.
-SHIELD_RADII = (35, 35, 40, 50, 60)    # px around the craft
-SHIELD_BORDER_WIDTHS = (1, 2, 4, 5, 6) # px
+SHIELD_RADII = (35, 35, 40, 50, 100)    # px around the craft
+SHIELD_BORDER_WIDTHS = (1, 2, 4, 5, 10) # px
 SHIELD_DRAIN = (5, 3, 3, 2, 2)         # charge units/frame while the key is held
 SHIELD_RECHARGE = (1, 3, 3, 3, 3)      # charge units/frame once released
 # Ramming bounce speed = impacting radius / divisor (spec: 40 px rock at
