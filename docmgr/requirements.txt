@@ -1,0 +1,3 @@
+# docmgr targets the stable FastMCP 1.x API. mcp 2.x renamed FastMCP to
+# MCPServer with a different API, so the major version is pinned.
+mcp>=1.9,<2

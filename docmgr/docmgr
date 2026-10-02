@@ -1,0 +1,432 @@
+#!/usr/bin/env python3
+"""docmgr — a simple document manager exposing local documents as MCP tools.
+
+An LLM client can list, search, read, and (with the right permissions)
+create, edit, and delete documents under a single served directory.
+
+See README.md for the tool contract, permission flags, and safety notes.
+"""
+
+import argparse
+import logging
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path, PurePosixPath
+
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+
+logger = logging.getLogger("docmgr")
+
+SNIPPET_CONTEXT = 50  # characters of context on either side of a search match
+
+
+class DocumentError(Exception):
+    """Domain error: invalid path, invalid argument, missing permission, or I/O failure."""
+
+
+class DocumentStore:
+    """All document operations for one served directory.
+
+    A "document" is a regular file under the served directory that decodes as
+    valid UTF-8. Everything else (directories, non-UTF-8 files, symlinks
+    escaping the root) is invisible to search/list/glob and rejected with an
+    error if addressed directly.
+    """
+
+    def __init__(self, root: Path, allow_edit: bool, allow_create: bool, allow_delete: bool) -> None:
+        self.root = root.resolve()
+        self.allow_edit = allow_edit
+        self.allow_create = allow_create
+        self.allow_delete = allow_delete
+
+    # -- path safety ----------------------------------------------------------
+
+    def resolve(self, rel_path: str) -> Path:
+        """Resolve rel_path under the served root, refusing any escape.
+
+        The raw-path checks (absolute / '..') reject the obvious cases early;
+        resolve() then follows symlinks so a link pointing outside the served
+        directory is caught as well (README: "Containment to served directory").
+        """
+        if not rel_path:
+            raise DocumentError("rel_path must not be empty")
+        if PurePosixPath(rel_path).is_absolute():
+            raise DocumentError(f"rel_path must be relative to the served directory, got {rel_path!r}")
+        if ".." in PurePosixPath(rel_path).parts:
+            raise DocumentError(f"rel_path must not contain '..', got {rel_path!r}")
+        candidate = (self.root / rel_path).resolve()
+        if candidate != self.root and self.root not in candidate.parents:
+            raise DocumentError(f"refusing {rel_path!r}: it resolves outside the served directory")
+        return candidate
+
+    # -- document discovery ----------------------------------------------------
+
+    def iter_documents(self) -> list[tuple[str, Path]]:
+        """Return (rel_path, path) for every served document, sorted by rel_path.
+
+        Hidden files are included. Files under symlinked directories are not
+        (pathlib's glob does not follow directory symlinks — a deliberate
+        conservative choice that also avoids symlink cycles).
+        """
+        docs: list[tuple[str, Path]] = []
+        for path in self.root.rglob("*"):
+            if not path.is_file():
+                continue
+            resolved = path.resolve()
+            if resolved != self.root and self.root not in resolved.parents:
+                continue  # symlink escaping the served directory
+            if not self._is_utf8(path):
+                continue
+            docs.append((path.relative_to(self.root).as_posix(), path))
+        docs.sort(key=lambda item: item[0])
+        return docs
+
+    @staticmethod
+    def _is_utf8(path: Path) -> bool:
+        try:
+            path.read_bytes().decode("utf-8")
+            return True
+        except (OSError, UnicodeDecodeError):
+            return False
+
+    def _read(self, rel_path: str, path: Path) -> str:
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise DocumentError(f"could not read {rel_path!r}: {exc}") from exc
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            # No 'from exc' here: the OSError variable above is out of scope
+            # on this path, and the original decode error adds no context.
+            raise DocumentError(f"{rel_path!r} is not a valid UTF-8 document") from None
+
+    def _write(self, rel_path: str, path: Path, text: str) -> None:
+        # Write to a temp file in the same directory and atomically replace, so
+        # a crash mid-write cannot leave a truncated document behind.
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".docmgr-")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as tmp:
+                tmp.write(text)
+            os.replace(tmp_name, path)
+        except OSError as exc:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise DocumentError(f"could not write {rel_path!r}: {exc}") from exc
+
+    # -- permissions ------------------------------------------------------------
+
+    def _require(self, permission: str) -> None:
+        enabled = {
+            "edit": self.allow_edit,
+            "create": self.allow_create,
+            "delete": self.allow_delete,
+        }[permission]
+        if not enabled:
+            raise DocumentError(f"{permission} is not enabled on this server (start docmgr with --allow-{permission})")
+
+    # -- operations --------------------------------------------------------------
+
+    def search(self, query: str, max_results: int, case_sensitive: bool) -> list[dict]:
+        if not query:
+            raise DocumentError("query must not be empty")
+        if max_results < 1:
+            raise DocumentError(f"max_results must be >= 1, got {max_results}")
+        # re.escape + IGNORECASE keeps offsets index-safe while still matching
+        # case-insensitively (str.lower() can change string length for some
+        # Unicode characters, which would corrupt offset arithmetic).
+        pattern = re.compile(re.escape(query), 0 if case_sensitive else re.IGNORECASE)
+
+        results: list[dict] = []
+        for rel_path, path in self.iter_documents():
+            content = self._read(rel_path, path)
+            match = pattern.search(content)
+            if match is None:
+                continue
+            offset = match.start()
+            snippet_start = max(0, offset - SNIPPET_CONTEXT)
+            snippet_end = min(len(content), match.end() + SNIPPET_CONTEXT)
+            results.append({
+                "rel_path": rel_path,
+                "snippet": content[snippet_start:snippet_end],
+                "snippet_offset": snippet_start,
+                "offset": offset,
+            })
+            if len(results) >= max_results:
+                break
+        return results
+
+    def list_all(self) -> list[str]:
+        return [rel_path for rel_path, _ in self.iter_documents()]
+
+    def glob(self, path_str: str) -> list[str]:
+        if not path_str:
+            raise DocumentError("glob pattern must not be empty")
+        if PurePosixPath(path_str).is_absolute():
+            raise DocumentError(f"glob pattern must be relative, got {path_str!r}")
+        if ".." in PurePosixPath(path_str).parts:
+            raise DocumentError(f"glob pattern must not contain '..', got {path_str!r}")
+
+        served = {rel_path for rel_path, _ in self.iter_documents()}
+        matches = set()
+        for path in self.root.glob(path_str):
+            try:
+                rel_path = path.relative_to(self.root).as_posix()
+            except ValueError:
+                continue
+            if rel_path in served:
+                matches.add(rel_path)
+        return sorted(matches)
+
+    def get(self, rel_path: str) -> str:
+        path = self.resolve(rel_path)
+        if not path.is_file():
+            raise DocumentError(f"no such document: {rel_path!r}")
+        return self._read(rel_path, path)
+
+    def length(self, rel_path: str) -> int:
+        return len(self.get(rel_path))
+
+    def partial(self, rel_path: str, offset: int, length: int) -> str:
+        content = self.get(rel_path)
+        if offset < 0 or offset > len(content):
+            raise DocumentError(f"offset {offset} is out of range: must be between 0 and {len(content)}")
+        if length < 0:
+            raise DocumentError(f"length must be >= 0, got {length}")
+        if offset + length > len(content):
+            raise DocumentError(f"offset+length ({offset + length}) exceeds document length ({len(content)})")
+        return content[offset:offset + length]
+
+    def edit(self, rel_path: str, to_replace: str, replace_with: str, offset: int) -> str:
+        self._require("edit")
+        path = self.resolve(rel_path)
+        if not path.is_file():
+            raise DocumentError(f"no such document: {rel_path!r}")
+        content = self._read(rel_path, path)
+        if offset < 0 or offset > len(content):
+            raise DocumentError(f"offset {offset} is out of range: must be between 0 and {len(content)}")
+        if content[offset:offset + len(to_replace)] != to_replace:
+            raise DocumentError(f"{rel_path!r} does not contain {to_replace!r} starting at offset {offset}")
+        new_content = content[:offset] + replace_with + content[offset + len(to_replace):]
+        self._write(rel_path, path, new_content)
+        return f"edited {rel_path!r}: replaced {len(to_replace)} char(s) at offset {offset}; new length {len(new_content)}"
+
+    def create(self, rel_path: str, text: str) -> str:
+        self._require("create")
+        path = self.resolve(rel_path)
+        if path.exists():
+            raise DocumentError(f"document already exists: {rel_path!r}")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise DocumentError(f"could not create parent directories for {rel_path!r}: {exc}") from exc
+        self._write(rel_path, path, text)
+        return f"created {rel_path!r} with {len(text)} char(s)"
+
+    def delete(self, rel_path: str) -> str:
+        self._require("delete")
+        path = self.resolve(rel_path)
+        if not path.is_file():
+            raise DocumentError(f"no such document: {rel_path!r}")
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise DocumentError(f"could not delete {rel_path!r}: {exc}") from exc
+        return f"deleted {rel_path!r}"
+
+
+def _call(store_method, *args):
+    """Invoke a store method, converting domain errors into MCP tool errors."""
+    try:
+        return store_method(*args)
+    except DocumentError as exc:
+        raise ToolError(str(exc)) from exc
+
+
+def describe_capabilities(store: DocumentStore) -> str:
+    """Describe this instance's write capabilities, for the client's LLM.
+
+    Surfacing the permission state up front in the server instructions lets
+    the model know before calling a write tool whether it will be permitted
+    — the runtime error message remains as the backstop.
+    """
+    def state(enabled: bool, flag: str) -> str:
+        return "enabled" if enabled else f"disabled (start docmgr with {flag})"
+
+    return (
+        f"Serving documents under {store.root}. Read tools are always available. "
+        f"Write capabilities on this instance: "
+        f"edit_document {state(store.allow_edit, '--allow-edit')}, "
+        f"create_document {state(store.allow_create, '--allow-create')}, "
+        f"delete_document {state(store.allow_delete, '--allow-delete')}. "
+        f"Calling a write tool this instance does not permit returns an error naming the missing flag."
+    )
+
+
+def build_server(store: DocumentStore, host: str, port: int) -> FastMCP:
+    """Create the FastMCP server with the docmgr tools bound to store."""
+    mcp = FastMCP("docmgr", instructions=describe_capabilities(store), host=host, port=port)
+
+    @mcp.tool()
+    def search_documents(query: str, max_results: int = 20, case_sensitive: bool = False) -> list[dict]:
+        """Search all served documents (recursively) for an exact substring.
+
+        Returns at most max_results hits (default 20), at most one per matching
+        document, each as a dict with keys: rel_path, snippet (up to 50 chars on
+        either side of the FIRST match), snippet_offset (character offset of the
+        snippet start), and offset (character offset where the match starts).
+        Case-insensitive unless case_sensitive is true. Empty list if no hits.
+        """
+        return _call(store.search, query, max_results, case_sensitive)
+
+    @mcp.tool()
+    def list_all_documents() -> list[str]:
+        """List the relative paths of all served documents (recursively, hidden
+        files included, non-UTF-8 files excluded), sorted by rel_path.
+        Equivalent to glob("**/*")."""
+        return _call(store.list_all)
+
+    @mcp.tool()
+    def glob(path_str: str) -> list[str]:
+        """Return the relative paths of served documents matching a wildcard
+        pattern like '*.txt' or '**/*.txt', sorted by rel_path."""
+        return _call(store.glob, path_str)
+
+    @mcp.tool()
+    def get_document(rel_path: str) -> str:
+        """Return the full text content of the document at rel_path, which must
+        be strictly relative to the served directory (absolute paths and paths
+        containing '..' are rejected)."""
+        return _call(store.get, rel_path)
+
+    @mcp.tool()
+    def get_document_length(rel_path: str) -> int:
+        """Return the length of the document at rel_path in characters (not bytes)."""
+        return _call(store.length, rel_path)
+
+    @mcp.tool()
+    def get_document_partial(rel_path: str, offset: int, length: int) -> str:
+        """Return up to `length` characters of the document at rel_path, starting
+        at character `offset`. offset must be in [0, document length] and
+        offset+length must not exceed the document length."""
+        return _call(store.partial, rel_path, offset, length)
+
+    @mcp.tool()
+    def edit_document(rel_path: str, to_replace: str, replace_with: str, offset: int) -> str:
+        """Replace one exact occurrence in the document at rel_path: to_replace
+        must begin at character offset and is replaced by replace_with. An empty
+        to_replace inserts replace_with at offset (e.g. offset = document length
+        appends to the end). Requires edit permission."""
+        return _call(store.edit, rel_path, to_replace, replace_with, offset)
+
+    @mcp.tool()
+    def create_document(rel_path: str, text: str) -> str:
+        """Create a new document at rel_path with the given text, creating parent
+        directories as needed. Fails if the path already exists. Requires create
+        permission."""
+        return _call(store.create, rel_path, text)
+
+    @mcp.tool()
+    def delete_document(rel_path: str) -> str:
+        """Delete the document at rel_path (its containing directory is kept).
+        Fails if no such document exists. Requires delete permission."""
+        return _call(store.delete, rel_path)
+
+    return mcp
+
+
+def serve_http(mcp: FastMCP, host: str, port: int) -> None:
+    """Serve the streamable-HTTP endpoint with CORS enabled.
+
+    FastMCP's streamable-http app ships without CORS middleware, but
+    browser-based clients (e.g. the MCP Inspector's direct-connect mode)
+    issue an OPTIONS preflight before the real request; without
+    Access-Control-Allow-* headers the browser aborts the fetch with a
+    NetworkError. This replicates mcp.run(transport="streamable-http")
+    internally, so the app can be wrapped before serving.
+    """
+    import uvicorn
+    from starlette.middleware.cors import CORSMiddleware
+
+    app = mcp.streamable_http_app()
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # local dev tool; the README warns about the permissions, not the network
+        allow_methods=["*"],
+        allow_headers=["*"],  # covers Content-Type, Accept, Mcp-Session-Id, Last-Event-ID
+        # Browsers only expose a fixed list of "simple" response headers to
+        # JavaScript cross-origin; mcp-session-id is not one of them. Without
+        # this, Direct-mode browser clients (e.g. MCP Inspector) complete the
+        # initialize POST but cannot read the session ID from the response,
+        # and every follow-up request fails with "Missing session ID".
+        expose_headers=["mcp-session-id", "last-event-id", "retry-after"],
+    )
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="docmgr",
+        description="Serve a directory of local documents as MCP tools "
+                    "(stdio by default, streamable HTTP with --host).",
+    )
+    parser.add_argument("path", help="directory to serve; must exist and be readable")
+    parser.add_argument("--allow-edit", action="store_true", help="allow edit_document")
+    parser.add_argument("--allow-create", action="store_true", help="allow create_document")
+    parser.add_argument("--allow-delete", action="store_true", help="allow delete_document")
+    parser.add_argument("--allow-all", action="store_true",
+                        help="synonym for --allow-edit --allow-create --allow-delete")
+    parser.add_argument("--host", help="enable streamable HTTP on this host (e.g. 127.0.0.1); omit for stdio")
+    parser.add_argument("--port", type=int, default=8080,
+                        help="streamable HTTP port, must be > 1024 (default 8080); ignored without --host")
+    args = parser.parse_args(argv)
+
+    # Validated even without --host: failing fast on a nonsense port beats
+    # silently ignoring it.
+    if not 1024 < args.port <= 65535:
+        parser.error(f"--port must be in the range 1025..65535, got {args.port}")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    # Logs go to stderr: on the stdio transport, stdout is reserved for the MCP protocol.
+    logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                        format="%(levelname)s %(name)s: %(message)s")
+    args = parse_args(argv)
+
+    root = Path(args.path).expanduser()
+    if not root.is_dir():
+        print(f"error: {args.path} does not exist or is not a directory", file=sys.stderr)
+        return 1
+    if not os.access(root, os.R_OK):
+        print(f"error: {args.path} is not readable", file=sys.stderr)
+        return 1
+
+    allow_edit = args.allow_edit or args.allow_all
+    allow_create = args.allow_create or args.allow_all
+    allow_delete = args.allow_delete or args.allow_all
+    if (allow_edit or allow_create or allow_delete) and not os.access(root, os.W_OK):
+        print(f"error: {args.path} is not writable, but edit/create/delete is enabled", file=sys.stderr)
+        return 1
+
+    store = DocumentStore(root, allow_edit, allow_create, allow_delete)
+    mcp = build_server(store, host=args.host or "127.0.0.1", port=args.port)
+
+    if args.host:
+        logger.info("serving %s via streamable-http on %s:%s/mcp (edit=%s create=%s delete=%s)",
+                    root.resolve(), args.host, args.port, allow_edit, allow_create, allow_delete)
+        serve_http(mcp, args.host, args.port)
+    else:
+        logger.info("serving %s via stdio (edit=%s create=%s delete=%s)",
+                    root.resolve(), allow_edit, allow_create, allow_delete)
+        mcp.run(transport="stdio")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

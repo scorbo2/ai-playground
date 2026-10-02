@@ -1,0 +1,2 @@
+# Development-only dependencies (runtime deps are in requirements.txt).
+pytest
