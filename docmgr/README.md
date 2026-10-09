@@ -76,7 +76,7 @@ the same on Windows, macOS, and Linux:
 
 - Absolute paths are rejected — including Windows drive paths (`C:\docs\file.txt`,
   `C:/docs/file.txt`) and UNC shares (`\\server\share\file.txt`).
-- Paths containing `..` are rejected, in either separator style (`a/../b` and `a\..\b`).
+- Paths containing `..` are rejected (`a/../b`); on Windows the backslash form (`a\..\b`) is rejected as well.
 - Relative paths may use either separator on Windows (`docs/file.txt` and
   `docs\file.txt` are both fine); on Linux/macOS use forward slashes as usual.
 
