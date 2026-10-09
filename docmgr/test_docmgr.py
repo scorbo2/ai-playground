@@ -10,7 +10,7 @@ Run:  .venv/bin/pytest test_docmgr.py
 
 import importlib.util
 from importlib.machinery import SourceFileLoader
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -88,6 +88,78 @@ class TestPathSafety:
         store = make_store(docs_dir)
         with pytest.raises(DocumentError, match="outside the served directory"):
             store.resolve("escape.txt")
+
+
+# -- path safety: Windows path flavours -----------------------------------------
+#
+# No Windows machine is available in CI, so these tests swap the module's
+# PurePath for PureWindowsPath. pathlib's Windows flavour parses strings
+# identically on every host, so this faithfully simulates Windows
+# validation (issue #3: "Windows Paths not supported").
+
+
+class TestPathSafetyWindowsPaths:
+    @pytest.fixture
+    def windows_flavour(self, monkeypatch):
+        """Make the store validate rel_paths with Windows path semantics."""
+        monkeypatch.setattr(docmgr, "PurePath", PureWindowsPath)
+
+    def test_resolve_withWindowsDriveAbsolutePath_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN resolving a drive-absolute path,
+        # THEN it is rejected by the early 'must be relative' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match="relative"):
+            store.resolve(r"C:\Users\paul\docs\file.txt")
+
+    def test_resolve_withWindowsForwardSlashDriveAbsolutePath_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN resolving a drive-absolute path using forward slashes,
+        # THEN it is rejected by the early 'must be relative' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match="relative"):
+            store.resolve("C:/Users/paul/docs/file.txt")
+
+    def test_resolve_withWindowsUncAbsolutePath_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN resolving a UNC path,
+        # THEN it is rejected by the early 'must be relative' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match="relative"):
+            store.resolve(r"\\server\share\file.txt")
+
+    def test_resolve_withWindowsBackslashDotDot_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN resolving a backslash-separated '..' escape,
+        # THEN it is rejected by the early 'must not contain ..' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match=r"\.\."):
+            store.resolve(r"..\..\outside\secret.txt")
+
+    def test_resolve_withWindowsBackslashRelativePath_passesEarlyValidation(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated and a document at docs/hello.txt,
+        # WHEN resolving the backslash form of a relative path,
+        # THEN early validation does not reject it (on real Windows the OS
+        # treats the backslash as a separator, so this finds the document):
+        store = make_store(docs_dir)
+        candidate = store.resolve(r"docs\hello.txt")
+        assert candidate.is_absolute()
+
+    def test_glob_withWindowsDriveAbsolutePattern_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN globbing a drive-absolute pattern,
+        # THEN it is rejected by the early 'must be relative' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match="relative"):
+            store.glob(r"C:\*")
+
+    def test_glob_withWindowsBackslashDotDotPattern_raisesDocumentError(self, docs_dir, windows_flavour):
+        # GIVEN Windows path parsing is simulated,
+        # WHEN globbing a backslash-separated '..' pattern,
+        # THEN it is rejected by the early 'must not contain ..' check:
+        store = make_store(docs_dir)
+        with pytest.raises(DocumentError, match=r"\.\."):
+            store.glob(r"..\..\*.txt")
 
 
 # -- stage 2: read-only tools --------------------------------------------------

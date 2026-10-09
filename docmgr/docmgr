@@ -13,7 +13,7 @@ import os
 import re
 import sys
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePath
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -44,6 +44,23 @@ class DocumentStore:
 
     # -- path safety ----------------------------------------------------------
 
+    @staticmethod
+    def _require_relative(rel_path: str, label: str) -> None:
+        """Reject rel_path early if it is absolute or contains a '..' segment.
+
+        PurePath uses the platform-native path flavour, so Windows-style
+        input (drive letters, backslash separators, UNC shares) is validated
+        the way the OS will interpret it, not only POSIX-style input.
+        This is a fast path for friendly errors only: the containment
+        check in resolve() remains the real guarantee, since it follows
+        symlinks and re-resolves against the served root.
+        """
+        parsed = PurePath(rel_path)
+        if parsed.is_absolute():
+            raise DocumentError(f"{label} must be relative to the served directory, got {rel_path!r}")
+        if ".." in parsed.parts:
+            raise DocumentError(f"{label} must not contain '..', got {rel_path!r}")
+
     def resolve(self, rel_path: str) -> Path:
         """Resolve rel_path under the served root, refusing any escape.
 
@@ -53,10 +70,7 @@ class DocumentStore:
         """
         if not rel_path:
             raise DocumentError("rel_path must not be empty")
-        if PurePosixPath(rel_path).is_absolute():
-            raise DocumentError(f"rel_path must be relative to the served directory, got {rel_path!r}")
-        if ".." in PurePosixPath(rel_path).parts:
-            raise DocumentError(f"rel_path must not contain '..', got {rel_path!r}")
+        self._require_relative(rel_path, "rel_path")
         candidate = (self.root / rel_path).resolve()
         if candidate != self.root and self.root not in candidate.parents:
             raise DocumentError(f"refusing {rel_path!r}: it resolves outside the served directory")
@@ -167,10 +181,7 @@ class DocumentStore:
     def glob(self, path_str: str) -> list[str]:
         if not path_str:
             raise DocumentError("glob pattern must not be empty")
-        if PurePosixPath(path_str).is_absolute():
-            raise DocumentError(f"glob pattern must be relative, got {path_str!r}")
-        if ".." in PurePosixPath(path_str).parts:
-            raise DocumentError(f"glob pattern must not contain '..', got {path_str!r}")
+        self._require_relative(path_str, "glob pattern")
 
         served = {rel_path for rel_path, _ in self.iter_documents()}
         matches = set()

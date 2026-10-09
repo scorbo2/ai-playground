@@ -69,6 +69,17 @@ The script uses `Path.resolve()` to prevent the LLM from accidentally (or delibe
 Any requested `rel_path` that somehow resolves to a location outside of the served directory is rejected with an error.
 (This can actually happen with symlinks).
 
+## Cross-platform paths
+
+`rel_path` values are validated with the OS-native path flavour, so docmgr behaves
+the same on Windows, macOS, and Linux:
+
+- Absolute paths are rejected — including Windows drive paths (`C:\docs\file.txt`,
+  `C:/docs/file.txt`) and UNC shares (`\\server\share\file.txt`).
+- Paths containing `..` are rejected, in either separator style (`a/../b` and `a\..\b`).
+- Relative paths may use either separator on Windows (`docs/file.txt` and
+  `docs\file.txt` are both fine); on Linux/macOS use forward slashes as usual.
+
 ## Tools list
 
 - `search_documents(query: str, max_results: int = 20, case_sensitive: bool = false) -> list[dict]` : accepts a search string
