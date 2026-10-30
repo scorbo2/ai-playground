@@ -28,10 +28,16 @@ from game_constants import (
     CANNON_PROJECTILE_SIZE,
     CANNON_PROJECTILE_SPEED,
     CRAFT_SPAWN_SAFE_DISTANCE,
-    LIGHT_RED,
     PLAYER_RADIUS,
+    UFO_BODY_COLOR,
     UFO_DIRECTION_CHANGE_INTERVAL,
+    UFO_DOME_COLOR,
+    UFO_DOME_HEIGHT,
+    UFO_DOME_WIDTH,
     UFO_FIRE_INTERVAL,
+    UFO_LIGHT_COLORS,
+    UFO_LIGHT_COUNT,
+    UFO_LIGHT_RADIUS,
     UFO_OVAL_HEIGHT,
     UFO_OVAL_WIDTH,
     UFO_OUTLINE_WIDTH,
@@ -115,10 +121,29 @@ class UFO:
         )
 
     def draw(self, screen: pygame.Surface) -> None:
-        rect = pygame.Rect(0, 0, UFO_OVAL_WIDTH, UFO_OVAL_HEIGHT)
-        rect.center = (int(round(self.x)), int(round(self.y)))
-        pygame.draw.ellipse(screen, LIGHT_RED, rect)
-        pygame.draw.ellipse(screen, WHITE, rect, width=UFO_OUTLINE_WIDTH)
+        cx = int(round(self.x))
+        cy = int(round(self.y))
+
+        # Flat saucer disc (body)
+        body_rect = pygame.Rect(0, 0, UFO_OVAL_WIDTH, UFO_OVAL_HEIGHT)
+        body_rect.center = (cx, cy)
+        pygame.draw.ellipse(screen, UFO_BODY_COLOR, body_rect)
+        pygame.draw.ellipse(screen, WHITE, body_rect, width=UFO_OUTLINE_WIDTH)
+
+        # Dome sitting on top of the disc
+        dome_rect = pygame.Rect(0, 0, UFO_DOME_WIDTH, UFO_DOME_HEIGHT)
+        dome_rect.centerx = cx
+        dome_rect.bottom = cy + 4  # overlap disc center by 4 px
+        pygame.draw.ellipse(screen, UFO_DOME_COLOR, dome_rect)
+        pygame.draw.ellipse(screen, WHITE, dome_rect, width=UFO_OUTLINE_WIDTH)
+
+        # Colored lights evenly spaced around the disc rim
+        for i in range(UFO_LIGHT_COUNT):
+            angle = (i / UFO_LIGHT_COUNT) * 2 * math.pi
+            lx = cx + int((UFO_OVAL_WIDTH / 2 - UFO_LIGHT_RADIUS) * math.cos(angle))
+            ly = cy + int((UFO_OVAL_HEIGHT / 2 - 2) * math.sin(angle))
+            pygame.draw.circle(screen, UFO_LIGHT_COLORS[i % len(UFO_LIGHT_COLORS)],
+                               (lx, ly), UFO_LIGHT_RADIUS)
 
 
 def player_hits_ufo(craft: PlayerCraft, ufo: UFO,

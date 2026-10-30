@@ -123,8 +123,9 @@ from game_constants import (
     PLAYER_RADIUS,
     POWERUP_DROP_CHANCES,
     POWERUP_INTERVAL,
-    UFO_INTERVAL,
     UFO_MAX_ACTIVE,
+    UFO_MIN_INTERVAL,
+    UFO_MAX_INTERVAL,
     WHITE,
 )
 from hud import HudData, draw_game_hud
@@ -191,7 +192,7 @@ class GameState(GameModeState):
         # full value (spec: Timers / Powerups). The 3-minute UFO counter
         # has the exact same persistence rule (spec: Enemy UFOs).
         self._powerup_timer = POWERUP_INTERVAL
-        self._ufo_timer = UFO_INTERVAL
+        self._ufo_timer = random.randint(UFO_MIN_INTERVAL, UFO_MAX_INTERVAL)
         self._game_time_frames = 0  # active game time only (spec: Timers)
         # Keys physically held right now. Space is press-based for
         # activations but the HOLD state feeds the laser/shield drain.
@@ -486,7 +487,7 @@ class GameState(GameModeState):
         self._ufo_timer -= 1
         if self._ufo_timer > 0:
             return
-        self._ufo_timer = UFO_INTERVAL
+        self._ufo_timer = random.randint(UFO_MIN_INTERVAL, UFO_MAX_INTERVAL)
         if len(self._ufos) >= UFO_MAX_ACTIVE:
             return  # at cap: reset only, no spawn (spec)
         self._ufos.append(spawn_ufo(

@@ -278,13 +278,21 @@ FUEL_POD_GREEN_MAX = 255
 # Per the spec ("Enemy UFOs"): a hostile that drifts in a straight line,
 # deflects periodically, and fires at the craft. Every timer here is counted
 # in frames of ACTIVE play, so pause (and level intros) suspend it for free.
-UFO_OVAL_WIDTH = 60                    # px, the drawn ellipse is 60 wide...
-UFO_OVAL_HEIGHT = 35                   # ...by 35 tall
+UFO_OVAL_WIDTH = 60                    # px, saucer disc is 60 wide...
+UFO_OVAL_HEIGHT = 18                   # ...by 18 tall (flat disc shape)
 UFO_OUTLINE_WIDTH = 2                  # px, matches the other outlines
+UFO_BODY_COLOR = (180, 180, 200)       # metallic silver-gray saucer body
+UFO_DOME_WIDTH = 30                    # px, the dome on top of the disc
+UFO_DOME_HEIGHT = 20                   # px, dome height
+UFO_DOME_COLOR = (80, 220, 255)        # cyan-blue dome
+UFO_LIGHT_COUNT = 6                    # colored lights around the disc rim
+UFO_LIGHT_RADIUS = 3                   # px per light
+UFO_LIGHT_COLORS = (YELLOW, GREEN, RED, CYAN)  # cycling rim light colors
 UFO_RADIUS = 60                        # bounding circle (spec: Collision)
 UFO_SPEED = 2                          # px/frame, straight-line drift
 UFO_SPAWN_ATTEMPTS = 50                # random tries for a safe spawn spot
-UFO_INTERVAL = 1 * 60 * 60             # 3600 frames (1 min of active play)
+UFO_MIN_INTERVAL = 15 * 60            # 900 frames (15s minimum between spawns)
+UFO_MAX_INTERVAL = 60 * 60            # 3600 frames (60s maximum between spawns)
 UFO_MAX_ACTIVE = 3                     # cap; an expired timer at cap just resets
 UFO_DIRECTION_CHANGE_INTERVAL = 300    # frames between random deflections
 UFO_TURN_MAX_DEGREES = 30              # max deflection, random left/right
