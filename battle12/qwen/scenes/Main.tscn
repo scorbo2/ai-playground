@@ -1,0 +1,73 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/game_controller.gd" id="1_main"]
+[ext_resource type="PackedScene" path="res://scenes/Player.tscn" id="2_player"]
+[ext_resource type="Script" path="res://scripts/asteroid_manager.gd" id="3_manager"]
+[ext_resource type="PackedScene" path="res://scenes/Asteroid.tscn" id="4_rock"]
+[ext_resource type="Texture2D" path="res://assets/starfield.png" id="5_stars"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_stars"]
+panorama = ExtResource("5_stars")
+
+[sub_resource type="Sky" id="Sky_stars"]
+sky_material = SubResource("PanoramaSkyMaterial_stars")
+
+[sub_resource type="Environment" id="Environment_space"]
+background_mode = 2
+background_sky = SubResource("Sky_stars")
+ambient_light_source = 2
+ambient_light_color = Color(0.4, 0.45, 0.6, 1)
+ambient_light_energy = 0.6
+tonemap_mode = 2
+glow_enabled = true
+glow_intensity = 0.6
+glow_bloom = 0.05
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_space")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation = Vector3(-0.9, 0.6, 0.0)
+light_energy = 1.4
+shadow_enabled = true
+
+[node name="Player" parent="." instance=ExtResource("2_player")]
+
+[node name="AsteroidManager" type="Node3D" parent="."]
+script = ExtResource("3_manager")
+asteroid_scene = ExtResource("4_rock")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="ScoreLabel" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 16.0
+offset_right = 424.0
+offset_bottom = 64.0
+theme_override_font_sizes/font_size = 26
+text = "SCORE: 0"
+
+[node name="Crosshair" type="Label" parent="HUD"]
+modulate = Color(1, 1, 1, 0.6)
+theme_override_font_sizes/font_size = 26
+text = "+"
+
+[node name="HelpLabel" type="Label" parent="HUD"]
+offset_left = 24.0
+offset_top = 640.0
+offset_right = 976.0
+offset_bottom = 700.0
+modulate = Color(1, 1, 1, 0.45)
+theme_override_font_sizes/font_size = 16
+text = "Mouse: steer  |  W/S: thrust  |  A/D: strafe  |  Space/C: climb/dive  |  Shift: boost  |  Left click: fire"
+
+[node name="GameOverPanel" type="ColorRect" parent="HUD"]
+color = Color(0, 0, 0, 0.6)
+
+[node name="GameOverLabel" type="Label" parent="HUD/GameOverPanel"]
+theme_override_font_sizes/font_size = 42
+text = "SHIP DESTROYED
+Press R to restart"

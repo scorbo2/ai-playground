@@ -1,0 +1,31 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+[ext_resource type="PackedScene" path="res://assets/skyjet.glb" id="2_model"]
+[ext_resource type="PackedScene" path="res://scenes/Bullet.tscn" id="3_bullet"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_hull"]
+size = Vector3(3.4, 1.4, 5.4)
+
+[node name="Player" type="Area3D"]
+collision_layer = 1
+collision_mask = 2
+script = ExtResource("1_player")
+bullet_scene = ExtResource("3_bullet")
+
+[node name="ShipModel" parent="." instance=ExtResource("2_model")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_hull")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 4.8)
+current = true
+fov = 72.0
+
+[node name="MuzzleR" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.05, 0.0, -2.3)
+
+[node name="MuzzleL" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.05, 0.0, -2.3)
