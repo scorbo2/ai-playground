@@ -16,6 +16,9 @@
  *   merged settings (global + project, deep-merged, project wins) and apply
  *   `compaction.enabled ?? true` — the same rule AgentSession uses. File
  *   reads are mtime-cached so per-render cost stays a couple of stat calls.
+ * - The provider is always shown (width permitting). pi's built-in footer
+ *   gates it behind getAvailableProviderCount() > 1, which is never true for
+ *   a single-provider models.json setup — see the note in renderFooter().
  * - The footer is reinstalled on every session_start: pi creates a fresh
  *   extension runner per session, so a footer closure holding a stale ctx
  *   would start throwing (its getters are guarded). setExtensionFooter()
@@ -153,8 +156,8 @@ export default function (pi: ExtensionAPI) {
 		// truncates when there isn't enough room.
 		const minPadding = 2;
 
-		// Left: model id, thinking level, provider (only when several providers
-		// are available) — same content as the built-in footer's right side.
+		// Left: model id, thinking level, provider — same content as the
+		// built-in footer's right side.
 		const model = ctx.model;
 		const modelName = model?.id || "no-model";
 		let modelSide = modelName;
@@ -181,9 +184,16 @@ export default function (pi: ExtensionAPI) {
 		else if (percentValue > 70) usageSide = theme.fg("warning", usageSide);
 		const usageWidth = visibleWidth(usageSide);
 
-		// Prepend the provider in parentheses if there are multiple providers and
-		// the widened left side still fits alongside the (kept whole) stats.
-		if (footerData.getAvailableProviderCount() > 1 && model) {
+		// Prepend the provider, with only the width budget as a veto.
+		//
+		// pi's built-in footer additionally requires getAvailableProviderCount()
+		// > 1 ("if you only have one provider, you obviously know which one
+		// you're on"). That count is the number of *distinct providers with
+		// available models*, not the number configured in models.json — so with a
+		// single-provider models.json (and no other provider holding credentials)
+		// it is always 1 and the provider name would never render. We want it
+		// regardless, so the heuristic is deliberately not copied here.
+		if (model) {
 			const withProvider = `(${model.provider}) ${modelSide}`;
 			if (visibleWidth(withProvider) + minPadding + usageWidth <= width) modelSide = withProvider;
 		}
