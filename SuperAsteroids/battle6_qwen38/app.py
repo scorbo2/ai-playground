@@ -22,6 +22,7 @@ from effects.starfield import Starfield
 from game_constants import (
     FPS,
     FRIENDLY_FIRE_MESSAGE,
+    GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE,
     INITIAL_WINDOW_SIZE,
     MINE_FRIENDLY_FIRE_MESSAGE,
     MIN_WINDOW_HEIGHT,
@@ -47,7 +48,7 @@ class SuperAsteroidsApp:
                  sound_on: bool = True):
         self.test_mode = test_mode
         # --debug (spec: "Debug option"): enables cheat hotkeys in Game
-        # Mode (C/L/S/M powerups, F for a fuel pod, U for a UFO).
+        # Mode (C/L/S/M/G powerups, F for a fuel pod, U for a UFO).
         self.debug_mode = debug_mode
         # Mixer config made explicit, pre_init BEFORE pygame.init(). The
         # values match pygame's defaults and the shipped WAV format (see
@@ -146,9 +147,11 @@ class SuperAsteroidsApp:
         # weapon deaths later (Stages 4-6, with their green special messages).
         # Death SFX (sfx/README.md): the friendly-fire sound is reserved for
         # exactly that; EVERY other death (asteroid contact, UFO contact,
-        # hostile fire) uses the generic one.
+        # hostile fire) uses the generic one. A player's own gravity well
+        # crushing them is friendly fire by any reading of the word.
         if special_message in (FRIENDLY_FIRE_MESSAGE,
-                               MINE_FRIENDLY_FIRE_MESSAGE):
+                               MINE_FRIENDLY_FIRE_MESSAGE,
+                               GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE):
             self._sound.play(SFX_SHIP_DESTROYED_FRIENDLY_FIRE)
         else:
             self._sound.play(SFX_SHIP_DESTROYED_ASTEROID)

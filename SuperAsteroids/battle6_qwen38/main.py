@@ -23,9 +23,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="enable debug hotkeys in Game Mode: C/L/S/M spawn a Cannon/"
-                "Laser/Shield/Mines powerup, F spawns a fuel pod, "
-                "U spawns an enemy UFO",
+        help="enable debug hotkeys in Game Mode: C/L/S/M/G spawn a Cannon/"
+             "Laser/Shield/Mines/Gravity-well powerup, F spawns a fuel pod, "
+             "U spawns an enemy UFO",
     )
     parser.add_argument(
         "--nosound",

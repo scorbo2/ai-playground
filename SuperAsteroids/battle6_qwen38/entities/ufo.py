@@ -38,6 +38,7 @@ from game_constants import (
     UFO_LIGHT_COLORS,
     UFO_LIGHT_COUNT,
     UFO_LIGHT_RADIUS,
+    UFO_MAX_PUSH_SPEED,
     UFO_OVAL_HEIGHT,
     UFO_OVAL_WIDTH,
     UFO_OUTLINE_WIDTH,
@@ -66,6 +67,13 @@ class UFO:
         # First deflection and first shot on a full interval after spawn.
         self._turn_timer = UFO_DIRECTION_CHANGE_INTERVAL
         self._fire_timer = UFO_FIRE_INTERVAL
+        # External shove (a gravity well's pull, its collapse kick), kept
+        # SEPARATE from the heading: the spec's 2 px/frame drift is a property
+        # of the saucer, the push is something the world does to it, and
+        # keeping them apart means a well can never overwrite the UFO's own
+        # flight law (or the player's ability to read where it is going).
+        self._push_vx = 0.0
+        self._push_vy = 0.0
 
     @property
     def fire_ready(self) -> bool:
@@ -73,8 +81,24 @@ class UFO:
         return self._fire_timer <= 0
 
     def velocity(self) -> tuple:
+        """Own heading drift plus whatever the world is currently pushing it
+        with (see ``apply_push``)."""
         rad = math.radians(self.heading)
-        return (math.cos(rad) * UFO_SPEED, math.sin(rad) * UFO_SPEED)
+        return (math.cos(rad) * UFO_SPEED + self._push_vx,
+                math.sin(rad) * UFO_SPEED + self._push_vy)
+
+    def apply_push(self, dvx: float, dvy: float) -> None:
+        """Add an external shove (a gravity well dragging it in, or the
+        well's collapse kick flinging it out). The accumulated push is
+        clamped to UFO_MAX_PUSH_SPEED so no field can turn a saucer into
+        shrapnel; the saucer's own drift is untouched."""
+        self._push_vx += dvx
+        self._push_vy += dvy
+        pushed_speed = math.hypot(self._push_vx, self._push_vy)
+        if pushed_speed > UFO_MAX_PUSH_SPEED:
+            scale = UFO_MAX_PUSH_SPEED / pushed_speed
+            self._push_vx *= scale
+            self._push_vy *= scale
 
     def update(self, width: int, height: int) -> None:
         vx, vy = self.velocity()

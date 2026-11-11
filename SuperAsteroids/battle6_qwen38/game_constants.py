@@ -34,6 +34,7 @@ ORANGE = (255, 165, 0)
 BROWN = (139, 69, 19)
 LIGHT_BLUE = (173, 216, 230)
 CYAN = (0, 255, 255)
+MAGENTA = (255, 0, 255)
 LIGHT_RED = (255, 127, 127)
 LIGHT_GRAY = (200, 200, 200)
 DARK_GRAY = (64, 64, 64)
@@ -222,6 +223,107 @@ MINE_LEVEL_SPECS = (
 )
 MINE_FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE - WATCH THOSE MINES!"
 
+# ------------------------------------------------------------- gravity wells
+# The fifth weapon. Where the other four each put a thing BETWEEN the craft
+# and the world (a projectile, a beam, a ring, a bomb), a gravity well puts a
+# region of CURVED SPACE in the world: each PRESS anchors a singularity a
+# fixed distance ahead of the craft's tip, it drags every hazard inside its
+# pull radius toward a crush core, and it consumes whatever reaches the core.
+# It fires on press (not charge), its in-play count is capped per power level
+# exactly like the mine weapon, and every number that matters lives in
+# GRAVITY_WELL_LEVEL_SPECS below.
+#
+# Contracts worth knowing before tuning anything here:
+#   - the well is WORLD-ANCHORED: the craft's heading only chooses where it
+#     lands. The well then holds that spot for its whole lifetime, so it is
+#     area denial, not a missile. It has no velocity of its own and is not
+#     affected by other wells;
+#   - it pulls ASTEROIDS, UFOs, MINES and the CRAFT. Projectiles are exempt
+#     (bending one would lie about its cumulative travel budget - the spec
+#     counts pixels flown), and powerup icons / fuel pods are exempt (a
+#     pickup that gets flung around turns collection into luck);
+#   - the crush core consumes what touches it: asteroids are destroyed
+#     OUTRIGHT (no split - a well is a grinder, not a mulcher), UFOs die,
+#     mines detonate (so a well is a chain-reaction trigger), and the craft
+#     dies unless the ramming shield is raised or the player's own weapon is
+#     a power-5 well (the L5 perk: the singularity knows its owner);
+#   - when a well expires it COLLAPSES: an inward-bursting particle flash and
+#     an outward eviction kick on everything still inside the field. The kick
+#     is always away from the core, so it never kills - it clears the board.
+# Deployed 200 px past the tip (215 px from the craft's center), not
+# point-blank. The stand-off is a difficulty ramp, not a safety net: levels 1-3
+# (fields of 120/150/180 px) cannot reach the caster at all, level 4's 220 px
+# field reaches back and eats a parked ship in about a second, and level 5's
+# caster is exempt by the perk. The distance is also a deliberate margin
+# against the craft's 8 px/frame top speed - flying into your own core should
+# be a decision (a third of a second of visible black hole approaching), not an
+# accident of thrusting forward while the fire button is held.
+GRAVITY_WELL_LAUNCH_DISTANCE = 200     # px ahead of the craft's tip
+# The pull strength actually applied to the craft is scaled down by this:
+# the player should feel dragged, not helplessly vacuumed. Deliberately NOT
+# zero - a well you can stand on with impunity is a free asteroid vacuum, and
+# the slingshot/orbit play the drag enables is half the weapon's identity.
+GRAVITY_WELL_CRAFT_PULL_FACTOR = 0.5
+# ...and the craft's pull is FLOORED by this. The floor is not cosmetic: the
+# craft applies friction BEFORE integrating its position, and its stall rule
+# (PLAYER_STALL_SPEED) snaps anything under 0.05 px/frame to zero. A pull
+# weaker than that threshold leaves the player craft not slightly dragged but
+# COMPLETELY unmoved - a well that is secretly inert. The floor keeps the
+# hazard (and the slingshot) honest at every power level; against the 0.98
+# friction it settles at ~3 px/frame of drift, versus the craft's 0.3
+# px/frame^2 thrust, so fighting out of it is easy if you notice in time.
+GRAVITY_WELL_MIN_CRAFT_PULL = 0.06
+# Mines coast under the same friction + stall rules as the craft, so the table
+# strengths below are all kept above that 0.05 threshold too (see
+# GRAVITY_WELL_STRENGTH_MIN) - otherwise a level-1 field would bend asteroids
+# beautifully while leaving mines glued to the floor.
+GRAVITY_WELL_STRENGTH_MIN = 0.06
+# Popped wells fling everything still inside the field outward, linearly
+# fading to nothing at the rim. px/frame at the core.
+GRAVITY_WELL_COLLAPSE_KICK = 2.0
+# Pulled objects are speed-clamped: a level-5 well would otherwise accelerate
+# a rock to absurd speeds over its 600-frame lifetime (and an over-fast rock
+# tunnels straight through the core without ever being eaten).
+GRAVITY_WELL_MAX_PULLED_SPEED = 9.0
+# Power level at which the player's own wells stop pulling / crushing them.
+GRAVITY_WELL_SELF_IMMUNE_POWER = 5
+# One row per power level (index = power_level - 1):
+#   (in-play cap, pull radius, pull strength px/frame^2, crush core radius,
+#    lifetime frames, color). Cap None = unlimited. A press at the cap is
+#    BLOCKED - not a successful activation, so it scores no shot and plays no
+#    SFX (same contract as the mine weapon).
+# L1 is a small eddy that merely nudges a nearby rock off course; L5 is the
+# deliberately overpowered one: unlimited 300 px maelstroms that eat the whole
+# field, and they no longer reach the player who cast them. Every strength also
+# clears GRAVITY_WELL_STRENGTH_MIN (the friction/stall caveat above), and with
+# the launch stand-off (215 px) only the level-4 field reaches back to the
+# caster - the self-hazard arrives exactly where the weapon gets big.
+GRAVITY_WELL_LEVEL_SPECS = (
+    (1,    120, 0.08, 14, 240, MAGENTA),
+    (2,    150, 0.11, 16, 300, MAGENTA),
+    (3,    180, 0.15, 18, 360, WHITE),
+    (None, 220, 0.20, 20, 420, CYAN),
+    (None, 300, 0.30, 24, 600, ORANGE),
+)
+# --- cosmetics (the well is drawn as a spinning vortex over a faint ring
+# showing exactly how far its pull reaches - the field must be legible or the
+# weapon reads as random motion).
+# HUD label + powerup icon color, named so POWERUP_TYPES and GravityWells
+# .LABEL_COLOR can never drift apart (the other weapons duplicate their
+# palette constant inline; this one is the fifth, so it gets the tidy version).
+GRAVITY_WELL_LABEL_COLOR = MAGENTA
+GRAVITY_WELL_CORE_OUTLINE_WIDTH = 2
+GRAVITY_WELL_FIELD_RING_WIDTH = 1
+GRAVITY_WELL_SPIN_ARMS = 3             # spiral arms around the core
+GRAVITY_WELL_SPIN_ARC_DEGREES = 120    # sweep of each arm
+GRAVITY_WELL_SPIN_DEGREES_PER_FRAME = 6.0
+GRAVITY_WELL_INFALL_INTERVAL = 8       # frames between infall particle puffs
+GRAVITY_WELL_INFALL_PARTICLES = 2      # per puff
+GRAVITY_WELL_INFALL_SPEED_RANGE = (2.0, 5.0)   # px/frame, straight inward
+GRAVITY_WELL_COLLAPSE_PARTICLE_COUNT = 40
+GRAVITY_WELL_COLLAPSE_SPEED_RANGE = (4.0, 9.0)  # px/frame, straight outward
+GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE = "CRUSHED BY YOUR OWN GRAVITY WELL!"
+
 # ------------------------------------------------------------------ powerups
 POWERUP_RADIUS = 20                    # px
 POWERUP_SPEED = 2                      # px/frame drift
@@ -235,6 +337,9 @@ POWERUP_TYPES = (
     # Shrapnel mine icon (spec: Powerups): brown circle, white "M". The name
     # matches ShrapnelMines.NAME so the HUD and powerup share one string.
     ("Shrapnel mines", BROWN, "M"),
+    # Fifth weapon (not in the original spec's icon list): magenta circle,
+    # white "G". The name matches GravityWells.NAME, as above.
+    ("Gravity wells", GRAVITY_WELL_LABEL_COLOR, "G"),
 )
 POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
 POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
@@ -290,6 +395,12 @@ UFO_LIGHT_RADIUS = 3                   # px per light
 UFO_LIGHT_COLORS = (YELLOW, GREEN, RED, CYAN)  # cycling rim light colors
 UFO_RADIUS = 60                        # bounding circle (spec: Collision)
 UFO_SPEED = 2                          # px/frame, straight-line drift
+# A UFO has no velocity of its own - it drifts at the spec's constant 2
+# px/frame along its heading - so anything that shoves it (a gravity well)
+# accumulates a separate PUSH vector. This is that push's speed ceiling: the
+# spec's own drift is never capped, only the external shove, so a well can
+# definitely drag a saucer around but cannot launch it out of the game.
+UFO_MAX_PUSH_SPEED = 5.0
 UFO_SPAWN_ATTEMPTS = 50                # random tries for a safe spawn spot
 UFO_MIN_INTERVAL = 15 * 60            # 900 frames (15s minimum between spawns)
 UFO_MAX_INTERVAL = 60 * 60            # 3600 frames (60s maximum between spawns)
@@ -301,7 +412,7 @@ UFO_PROJECTILE_DISTANCE = 500          # half of the player's level 1 range
 HOSTILE_FIRE_MESSAGE = "HOSTILE FIRE!"
 
 # -------------------------------------------------------------------- debug
-# --debug hotkeys: C/L/S/M spawn a powerup of that type (no cap), F spawns a
+# --debug hotkeys: C/L/S/M/G spawn a powerup of that type (no cap), F spawns a
 # fuel pod (no cap), U spawns a UFO if under the active cap. Spawned powerup
 # and pod positions avoid the craft's safe distance.
 DEBUG_SPAWN_ATTEMPTS = 50

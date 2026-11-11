@@ -19,6 +19,10 @@ from typing import Dict
 import pygame
 
 from game_constants import (
+    GRAVITY_WELL_COLLAPSE_PARTICLE_COUNT,
+    GRAVITY_WELL_COLLAPSE_SPEED_RANGE,
+    GRAVITY_WELL_INFALL_PARTICLES,
+    GRAVITY_WELL_INFALL_SPEED_RANGE,
     LIGHT_RED,
     MINE_DETONATION_COLOR,
     MINE_DETONATION_PARTICLE_COUNT,
@@ -166,6 +170,56 @@ def spawn_mine_detonation(x: float, y: float) -> list:
     Shrapnel Mines)."""
     return [_explosion_particle(x, y, MINE_DETONATION_COLOR)
             for _ in range(MINE_DETONATION_PARTICLE_COUNT)]
+
+
+def _radial_particle(x: float, y: float, angle_rad: float, speed: float,
+                     color: tuple) -> ExplosionParticle:
+    """One debris particle moving along a GIVEN ray (rather than the usual
+    random heading). The gravity well's effects are directional on purpose:
+    infall spirals INWARD so the field reads as pulling, and the collapse
+    bursts OUTWARD so the player can see the field let go."""
+    return ExplosionParticle(
+        x=x,
+        y=y,
+        vx=math.cos(angle_rad) * speed,
+        vy=math.sin(angle_rad) * speed,
+        color=color,
+        decay_fraction=random.uniform(*PARTICLE_ALPHA_DECAY_RANGE),
+    )
+
+
+def spawn_gravity_well_infall(well) -> list:
+    """One puff of the well's ambient infall (game_constants:
+    GRAVITY_WELL_INFALL_INTERVAL): a few specks starting on the rim of the
+    pull field and falling straight into the core. Purely cosmetic - they
+    have no collision role, and the straight-inward motion is what makes an
+    invisible field legible."""
+    particles = []
+    for index in range(GRAVITY_WELL_INFALL_PARTICLES):
+        # Evenly fanned plus jitter, so successive puffs do not stamp the
+        # same two spokes over and over.
+        angle = ((index / GRAVITY_WELL_INFALL_PARTICLES) * 2.0 * math.pi
+                 + random.uniform(0.0, 2.0 * math.pi))
+        start_x = well.x + math.cos(angle) * well.pull_radius
+        start_y = well.y + math.sin(angle) * well.pull_radius
+        particles.append(_radial_particle(
+            start_x, start_y, angle + math.pi,
+            random.uniform(*GRAVITY_WELL_INFALL_SPEED_RANGE), well.color))
+    return particles
+
+
+def spawn_gravity_well_collapse(well) -> list:
+    """A well reaching the end of its life: its own color bursting OUTWARD
+    from the core, marking the moment the field releases what it was holding.
+    Same count for every power level (the well's size already sells the
+    difference)."""
+    particles = []
+    for _ in range(GRAVITY_WELL_COLLAPSE_PARTICLE_COUNT):
+        angle = random.uniform(0.0, 2.0 * math.pi)
+        particles.append(_radial_particle(
+            well.x, well.y, angle,
+            random.uniform(*GRAVITY_WELL_COLLAPSE_SPEED_RANGE), well.color))
+    return particles
 
 
 def spawn_thruster_puffs(craft) -> list:

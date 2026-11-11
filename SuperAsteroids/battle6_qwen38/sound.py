@@ -52,6 +52,10 @@ SFX_SHIP_DESTROYED_FRIENDLY_FIRE = "ship_destroyed_friendly_fire"
 SFX_MINE_ACTIVATED = "mine_activated"
 SFX_MINE_PULSE = "mine_pulse"
 SFX_MINE_DETONATE = "mine_detonate"
+# The fifth weapon's cues. Like the shield, one activation sound covers every
+# power level; the second cue marks the well reaching the end of its life.
+SFX_GRAVITY_WELL_ACTIVATED = "gravity_well_activated"
+SFX_GRAVITY_WELL_COLLAPSED = "gravity_well_collapsed"
 SFX_UFO = "ufo"
 SFX_UFO_DESTROYED = "ufo_destroyed"
 SFX_THRUSTERS = "thrusters"
@@ -78,6 +82,8 @@ ALL_SOUNDS = (
     SFX_MINE_ACTIVATED,
     SFX_MINE_PULSE,
     SFX_MINE_DETONATE,
+    SFX_GRAVITY_WELL_ACTIVATED,
+    SFX_GRAVITY_WELL_COLLAPSED,
     SFX_UFO,
     SFX_UFO_DESTROYED,
     SFX_THRUSTERS,

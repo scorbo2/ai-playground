@@ -1,12 +1,14 @@
 """Player weapons.
 
-All four weapons (Cannon, Laser, Ramming Shield, Shrapnel Mines) are live,
-with power levels 1-3 driven by powerup pickups. ``make_weapon`` materializes
-a weapon from its spec name (what powerup icons carry).
+All five weapons (Cannon, Laser, Ramming Shield, Shrapnel Mines, Gravity
+Wells) are live, with power levels 1-5 driven by powerup pickups.
+``make_weapon`` materializes a weapon from its spec name (what powerup icons
+carry).
 """
 
 from weapons.base import ChargedWeapon, Weapon
 from weapons.cannon import Cannon
+from weapons.gravity_well import GravityWells
 from weapons.laser import Laser
 from weapons.mine import ShrapnelMines
 from weapons.shield import RammingShield
@@ -14,6 +16,7 @@ from weapons.shield import RammingShield
 __all__ = [
     "Cannon",
     "ChargedWeapon",
+    "GravityWells",
     "Laser",
     "RammingShield",
     "ShrapnelMines",
@@ -29,6 +32,7 @@ _WEAPONS = {
     Laser.NAME: Laser,
     RammingShield.NAME: RammingShield,
     ShrapnelMines.NAME: ShrapnelMines,
+    GravityWells.NAME: GravityWells,
 }
 
 

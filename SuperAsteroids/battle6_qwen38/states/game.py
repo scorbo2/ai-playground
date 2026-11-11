@@ -50,6 +50,29 @@ receives a level-end bonus (it CARRIES OVER; level starts never refill it).
 Pod SFX reuse the powerup ones: sfx/README defines the spawn/destroy/collect
 cues for "a powerup icon or fuel pod".
 
+Stage 11 (the fifth weapon - Gravity Wells): the only weapon that never
+strikes anything. One space press ANCHORS a singularity 200 px ahead of the
+craft's tip (capped 1/2/3/unlimited/unlimited in play by power level, holding
+the bar does nothing); the well holds that spot for its whole lifetime
+(240-600 frames) while every hazard inside its pull radius (120-300 px,
+wrap-aware) gains velocity toward its crush core (14-24 px). Anything that
+reaches the core is consumed: asteroids are destroyed outright, UFOs die,
+mines detonate (a well is a chain-reaction trigger), and the craft dies
+("CRUSHED BY YOUR OWN GRAVITY WELL!") unless the ramming shield is raised -
+or unless the player's current weapon is a power-5 well, which no longer
+reaches its own ship. Projectiles and drops (icons, pods) are deliberately NOT
+pulled: bending a projectile would falsify its cumulative travel budget, and
+dragging pickups around makes collection luck-based. When a well expires it
+collapses: an inward particle flash, a ring of its own color bursting outward,
+and everything still inside the field shoved OUTWARD (linear falloff to
+nothing at the rim) - always away from the core, so the collapse can never be
+what kills the player. The pull is velocity-only and never brakes anything: a
+high-level rock is already faster than the field's speed ceiling, and the
+field's job is to bend trajectories, not to impose a limit on the whole world.
+Wells leave play at each level with every other transient object. Their two
+cues (activation, collapse) are synthesized in-repo because the arcade pack
+has nothing for "spacetime".
+
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
 During it - and while paused - the field is drawn frozen, the craft is
@@ -59,27 +82,34 @@ Frame order in the playing phase (matters for edge cases):
   1. movement: craft (emits thruster exhaust while it ACTUALLY thrusts -
      an empty fuel tank makes no exhaust), asteroids, player projectiles,
      UFOs (drift plus their cadence shots), UFO projectiles, powerup drift,
-     fuel pod drift, mine drift, mine projectile drift, then the cosmetic
-     particle field advances and its faded members are pruned
-  2. spawn timers (powerup, then UFO), then weapon charge drain/recharge
-  3. player weapons vs. the world (projectiles, laser beam, shield ram) -
+     fuel pod drift, mine drift, mine projectile drift, gravity well
+     lifetime tick, then the cosmetic particle field advances and its faded
+     members are pruned
+  2. gravity wells bend the field: a velocity nudge toward the core for every
+     hazard (and the craft) inside each pull radius, plus the ambient infall
+     particles that make an invisible field legible
+  3. spawn timers (powerup, then UFO), then weapon charge drain/recharge
+  4. player weapons vs. the world (projectiles, laser beam, shield ram) -
      this is also where UFOs get destroyed by player weapons, where
      powerup icons and fuel pods are destroyed out of grace, and where
      player projectiles/laser/shield detonate mines on contact
-  4. mine interactions: contact detonations (UFO, craft, projectile,
+  5. mine interactions: contact detonations (UFO, craft, projectile,
      asteroid), proximity activation (150px, latching), fuse expiry
-  5. mine burst projectiles vs. the world (asteroid score, powerup/fuel
+  6. gravity well contacts: crush-core consumption (craft, asteroids, UFOs,
+     mines - the bursts land in the mine projectile list arbitrated next),
+     then every expired well collapses (particles + outward eviction kick)
+  7. mine burst projectiles vs. the world (asteroid score, powerup/fuel
      pod, UFO, other mine detonation, craft friendly fire)
-  6. UFO projectiles vs. the world (asteroids without score, powerup
+  8. UFO projectiles vs. the world (asteroids without score, powerup
      icons/fuel pods, mines, the craft -> game over "HOSTILE FIRE!"
      unless shielded)
-  7. craft death check (fatal asteroid or UFO contact)
-  8. drop collection: powerup icons (weapon upgrade) and fuel pods
+  9. craft death check (fatal asteroid or UFO contact)
+ 10. drop collection: powerup icons (weapon upgrade) and fuel pods
      (+FUEL_POD_PICKUP, max FUEL_MAX) - any time, even during grace
-  9. drifting powerups and fuel pods vs. asteroids (out of grace only,
+  11. drifting powerups and fuel pods vs. asteroids (out of grace only,
      no score)
-  10. UFOs vs. powerups and fuel pods (steals - work even during grace)
-  11. level advancement when the field is clear (UFOs, mines, their
+  12. UFOs vs. powerups and fuel pods (steals - work even during grace)
+  13. level advancement when the field is clear (UFOs, mines, wells, their
       projectiles, and fuel pods leave play; the UFO spawn timer PERSISTS)
 """
 
@@ -94,6 +124,8 @@ from entities import (CannonProjectile, PlayerCraft, player_hits_asteroid,
 from entities.powerup import (Powerup, spawn_drop_powerup,
                               spawn_timer_powerup)
 from effects.particles import (spawn_destruction_explosion,
+                               spawn_gravity_well_collapse,
+                               spawn_gravity_well_infall,
                                spawn_mine_detonation, spawn_split_explosion,
                                spawn_thruster_puffs, spawn_ufo_explosion)
 from font_manager import render_text
@@ -109,6 +141,9 @@ from game_constants import (
     FUEL_MAX_POWER_REGEN_PER_FRAME,
     FUEL_POD_DROP_CHANCE,
     FUEL_POD_PICKUP,
+    GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE,
+    GRAVITY_WELL_MAX_PULLED_SPEED,
+    GRAVITY_WELL_SELF_IMMUNE_POWER,
     HEADING_FONT_SIZE,
     HOSTILE_FIRE_MESSAGE,
     LASER_SAMPLE_STEP,
@@ -120,6 +155,7 @@ from game_constants import (
     MINE_BURST_PROJECTILE_DISTANCE,
     MINE_FRIENDLY_FIRE_MESSAGE,
     MINE_LEVEL_SPECS,
+    PLAYER_MAX_SPEED,
     PLAYER_RADIUS,
     POWERUP_DROP_CHANCES,
     POWERUP_INTERVAL,
@@ -135,6 +171,8 @@ from sound import (
     SFX_ASTEROID_DESTROYED,
     SFX_ASTEROID_SPLIT,
     SFX_CANNON_BY_LEVEL,
+    SFX_GRAVITY_WELL_ACTIVATED,
+    SFX_GRAVITY_WELL_COLLAPSED,
     SFX_LASER_BY_LEVEL,
     SFX_MINE_ACTIVATED,
     SFX_MINE_DETONATE,
@@ -149,8 +187,32 @@ from sound import (
     SFX_UFO_DESTROYED,
 )
 from states.base import GameModeState
-from weapons import (Cannon, ChargedWeapon, Laser, RammingShield,
-                     ShrapnelMines, make_weapon)
+from weapons import (Cannon, ChargedWeapon, GravityWells, Laser,
+                     RammingShield, ShrapnelMines, make_weapon)
+
+
+def _add_velocity_and_clamp(obj, dvx: float, dvy: float,
+                            max_speed: float) -> None:
+    """Add one gravity field's nudge to an object's velocity, then cap the
+    result.
+
+    The cap deliberately never BRAKES anything: a high-level asteroid is
+    already moving faster than the field's ceiling, and a well's job is to
+    bend trajectories, not to impose a speed limit on the whole world. So the
+    ceiling is "whatever the object already had, or ``max_speed``, whichever
+    is larger" - which keeps the craft inside its own 8 px/frame law (spec:
+    Ship physics) while letting a long-lived level-5 well actually reel in a
+    rock over hundreds of frames instead of giving it one polite nudge.
+    """
+    speed_before = math.hypot(obj.vx, obj.vy)
+    obj.vx += dvx
+    obj.vy += dvy
+    ceiling = max(speed_before, max_speed)
+    speed_after = math.hypot(obj.vx, obj.vy)
+    if speed_after > ceiling:
+        scale = ceiling / speed_after
+        obj.vx *= scale
+        obj.vy *= scale
 
 
 class GameState(GameModeState):
@@ -176,6 +238,10 @@ class GameState(GameModeState):
         self._ufo_projectiles: list = []
         self._mines: list = []
         self._mine_projectiles: list = []
+        # Gravity wells (the fifth weapon) ride their own list, exactly like
+        # mines: the press-time cap is over live WELLS, and the objects they
+        # shove are everybody else's.
+        self._wells: list = []
         self._powerups: list = []
         # Fuel pods (spec: Fuel): they share the powerup icons' drift,
         # grace, and collision matrix, so they ride in a parallel list and
@@ -239,6 +305,7 @@ class GameState(GameModeState):
         self._ufo_projectiles = []
         self._mines = []
         self._mine_projectiles = []
+        self._wells = []
         self._powerups = []
         self._fuel_pods = []
         self._ufos = []
@@ -288,30 +355,45 @@ class GameState(GameModeState):
 
     def _on_weapon_press(self) -> None:
         """One space press: the cannon spawns projectiles, the charged
-        weapons arm their beam/shield, the mine weapon drops a mine.
+        weapons arm their beam/shield, the mine weapon drops a mine, the
+        gravity-well weapon anchors a singularity.
         ONLY a successful activation records a shot (spec: "Weapon
         activation") - or plays its SFX: the firing sounds key off the
         same success, so a blocked press (projectile cap, charge below 20,
-        mine cap reached) is silent and not counted."""
-        # Mine cap is over LIVE MINES, not projectiles: the weapon needs
-        # the mine list to check the count.
-        active = self._mines if isinstance(self._weapon, ShrapnelMines) \
-            else self._projectiles
-        if self._weapon.on_press(self._craft, active):
+        mine cap reached, well cap reached) is silent and not counted."""
+        if self._weapon.on_press(self._craft, self._press_target_list()):
             self._score.record_shot()
             self._play_weapon_activation_sound()
 
+    def _press_target_list(self) -> list:
+        """The in-play list this press's cap is measured against.
+
+        ``Weapon.on_press`` documents that each weapon knows which list it
+        was handed: the mine cap counts live MINES, the well cap counts live
+        WELLS, the cannon's in-flight cap counts PROJECTILES. This is the one
+        place that decides who gets what, so the weapons themselves never
+        have to reach into the game state."""
+        if isinstance(self._weapon, ShrapnelMines):
+            return self._mines
+        if isinstance(self._weapon, GravityWells):
+            return self._wells
+        return self._projectiles
+
     def _play_weapon_activation_sound(self) -> None:
         """The SFX for one successful activation (sfx/README.md): the
-        cannon and laser each have a per-power-level shot, the shield one
-        sound for any level."""
+        cannon and laser each have a per-power-level shot; the shield and
+        the gravity wells play one cue at any level."""
         if isinstance(self._weapon, Cannon):
             name = SFX_CANNON_BY_LEVEL[self._weapon.index()]
         elif isinstance(self._weapon, Laser):
             name = SFX_LASER_BY_LEVEL[self._weapon.index()]
         elif isinstance(self._weapon, RammingShield):
             name = SFX_SHIELD_ACTIVATED
+        elif isinstance(self._weapon, GravityWells):
+            name = SFX_GRAVITY_WELL_ACTIVATED
         else:
+            # The mine weapon has no activation cue of its own: its sounds
+            # are the pulse/arm/detonate events the mines themselves make.
             return
         self.app.sound.play(name)
 
@@ -327,6 +409,8 @@ class GameState(GameModeState):
             self._spawn_debug_powerup("Shield")
         elif key == pygame.K_m:
             self._spawn_debug_powerup("Shrapnel mines")
+        elif key == pygame.K_g:
+            self._spawn_debug_powerup("Gravity wells")
         elif key == pygame.K_f:
             self._spawn_debug_fuel_pod()
         elif key == pygame.K_u:
@@ -439,10 +523,18 @@ class GameState(GameModeState):
                 break  # one pulse sound per frame is plenty
         for projectile in self._mine_projectiles:
             projectile.update(width, height)
+        for well in self._wells:
+            # Lifetime tick + vortex spin. The collapse itself waits for the
+            # contact pass below, so a well that dies this frame still gets
+            # to eat whatever reached its core first.
+            well.update(width, height)
         # Cosmetic particles keep advancing until their alpha fades to 0;
         # Particle.update() reports its own fade-out, so a filter is the
         # whole cleanup. (No width/height: particles do not wrap.)
         self._particles = [p for p in self._particles if p.update()]
+        # Step 2 of the frame order: the wells bend the field (velocity only
+        # - the motion itself shows up on the next movement step).
+        self._apply_gravity_well_pull(width, height)
         self._tick_powerup_timer(width, height)
         self._tick_ufo_timer(width, height)
         # Charge drain/recharge before collision passes so a beam that
@@ -453,6 +545,8 @@ class GameState(GameModeState):
             return  # friendly fire already took us to Game Over
         if not self._resolve_mine_interactions(width, height):
             return  # mine friendly fire already took us to Game Over
+        if not self._resolve_gravity_well_contacts(width, height):
+            return  # a well crushed the craft; Game Over already triggered
         if not self._resolve_mine_projectile_hits(width, height):
             return  # mine burst friendly fire already took us to Game Over
         if not self._resolve_ufo_projectile_hits(width, height):
@@ -1027,6 +1121,195 @@ class GameState(GameModeState):
         self._asteroids = live + replacements
         return True
 
+    # ----------------------------------------------------------- gravity wells
+
+    def _apply_gravity_well_pull(self, width: int, height: int) -> None:
+        """Every live well bends the field - the fifth weapon's whole trick.
+
+        Asteroids, mines, UFOs and the craft gain velocity toward the core
+        while they are inside the field. The change is velocity-only, so the
+        visible motion (and therefore the crush-core contact) lands on the
+        NEXT frame: the pull reads as a curve, not a teleport.
+
+        Exempt on purpose: projectiles (bending one would falsify the
+        cumulative travel distance the spec counts) and drops (a powerup icon
+        or fuel pod that gets flung around turns collection into luck).
+
+        The craft feels it too - scaled down and floored by the entity's
+        ``craft_pull_toward`` so a well is a threat you fight against rather
+        than a vacuum you cannot argue with - but from only ONE well at a
+        time (see ``_pull_craft_toward_wells``).
+        """
+        for well in self._wells:
+            for asteroid in self._asteroids:
+                self._well_pulls(well, asteroid, asteroid.radius,
+                                 GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+            for mine in self._mines:
+                self._well_pulls(well, mine, mine.radius,
+                                 GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+            for ufo in self._ufos:
+                # A UFO has no velocity of its own (it drifts at the spec's
+                # constant 2 px/frame), so the field pushes it instead.
+                if well.within_pull_radius(ufo.x, ufo.y, ufo.radius,
+                                           width, height):
+                    ufo.apply_push(*well.pull_toward(ufo.x, ufo.y,
+                                                     width, height))
+            if well.infall_due:
+                # Specks falling into the core: the field itself is invisible
+                # by design, so without these the pull looks like random
+                # drift and the weapon looks broken rather than strange.
+                self._particles.extend(spawn_gravity_well_infall(well))
+        self._pull_craft_toward_wells(width, height)
+
+    def _pull_craft_toward_wells(self, width: int, height: int) -> None:
+        """The craft only ever feels the NEAREST well's field.
+
+        Fields genuinely stack for everything else in the world - six wells
+        really do bend a rock six times harder, and that stacking is a large
+        part of why the high power levels are the overpowered ones. It must
+        NOT stack on the player: overlapping pulls compound past what the
+        craft's 0.3 px/frame^2 of thrust can answer, which would turn the
+        weapon from a tool into a punishment for pressing the button twice.
+        The crush cores still all count - standing between two wells is still
+        lethal, it just does not vacuum you in.
+        """
+        if self._craft_is_immune_to_own_wells():
+            return  # the power-5 perk: a caster's own wells let them alone
+        nearest = None
+        nearest_distance = None
+        for well in self._wells:
+            if not well.within_pull_radius(self._craft.x, self._craft.y,
+                                           PLAYER_RADIUS, width, height):
+                continue
+            distance = torus_distance(self._craft.x, self._craft.y,
+                                      well.x, well.y, width, height)
+            if nearest_distance is None or distance < nearest_distance:
+                nearest, nearest_distance = well, distance
+        if nearest is None:
+            return
+        dvx, dvy = nearest.craft_pull_toward(self._craft.x, self._craft.y,
+                                             width, height)
+        _add_velocity_and_clamp(self._craft, dvx, dvy, PLAYER_MAX_SPEED)
+
+    def _well_pulls(self, well, target, target_radius: float,
+                    max_speed: float, width: int, height: int) -> None:
+        """One inward nudge on anything that carries its own velocity."""
+        if not well.within_pull_radius(target.x, target.y, target_radius,
+                                       width, height):
+            return
+        dvx, dvy = well.pull_toward(target.x, target.y, width, height)
+        _add_velocity_and_clamp(target, dvx, dvy, max_speed)
+
+    def _craft_is_immune_to_own_wells(self) -> bool:
+        """The power-5 perk of the fifth weapon: a level-5 well no longer
+        reaches the ship that cast it.
+
+        Keyed on the CURRENT weapon, exactly like the mine weapon's level-5
+        immunity to its own burst shots - switching weapons hands the old
+        singularity its teeth back."""
+        return (isinstance(self._weapon, GravityWells)
+                and self._weapon.power() >= GRAVITY_WELL_SELF_IMMUNE_POWER)
+
+    def _resolve_gravity_well_contacts(self, width: int,
+                                       height: int) -> bool:
+        """Crush-core arbitration, then the collapse of every expired well.
+        Returns False iff the craft was crushed (GameOver already triggered).
+
+        The craft is checked FIRST and the frame aborts on the crush, as the
+        mine and mine-burst passes do: once the player is dead, eating the
+        rest of the field is pointless.
+
+        What the core consumes:
+          - asteroid: destroyed OUTRIGHT (no split). A well grinds, it does
+            not mulch - and splitting inside the field would just feed the
+            core a dozen more rocks a frame later;
+          - UFO: destroyed (same cue as any other destruction);
+          - mine: detonated, so a well is a chain-reaction trigger. The burst
+            shots join the list the very next pass arbitrates.
+        """
+        shield_up = (isinstance(self._weapon, RammingShield)
+                     and self._weapon.firing)
+        self_immune = self._craft_is_immune_to_own_wells()
+        for well in list(self._wells):
+            if (not self_immune
+                    and well.touching(self._craft.x, self._craft.y,
+                                      PLAYER_RADIUS, width, height)):
+                if shield_up:
+                    # The ring holds (spec: nothing penetrates it) and the
+                    # craft is thrown off the core with the usual bounce
+                    # rules, the well's core radius standing in for the
+                    # impacting rock's.
+                    dx = shortest_delta(self._craft.x - well.x, width)
+                    dy = shortest_delta(self._craft.y - well.y, height)
+                    self._craft.bounce(
+                        dx, dy,
+                        well.core_radius / self._weapon.bounce_divisor)
+                else:
+                    self.app.to_game_over(GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE)
+                    return False
+            for asteroid in list(self._asteroids):
+                if well.touching(asteroid.x, asteroid.y, asteroid.radius,
+                                 width, height):
+                    self._asteroids.remove(asteroid)
+                    self._asteroids.extend(self._apply_asteroid_impact(
+                        asteroid, score=True, destroy_outright=True,
+                        impact_point=(well.x, well.y)))
+            for ufo in list(self._ufos):
+                if well.touching(ufo.x, ufo.y, ufo.radius, width, height):
+                    self._destroy_ufo(ufo)
+            for mine in list(self._mines):
+                if well.touching(mine.x, mine.y, mine.radius, width, height):
+                    self._mine_projectiles.extend(self._detonate_mine(mine))
+            if well.expired:
+                self._collapse_gravity_well(well, width, height)
+        return True
+
+    def _collapse_gravity_well(self, well, width: int, height: int) -> None:
+        """A well's lifetime runs out: it flashes, bursts its own color
+        outward, and evicts everything still inside the field.
+
+        The ValueError guard matters for the same reason it does for mines:
+        several passes can reach the same object in one frame, and a well
+        must never collapse (and never make noise) twice.
+        """
+        try:
+            self._wells.remove(well)
+        except ValueError:
+            return  # already collapsed this frame
+        self.app.sound.play(SFX_GRAVITY_WELL_COLLAPSED)
+        self._particles.extend(spawn_gravity_well_collapse(well))
+        self._evict_gravity_well(well, width, height)
+
+    def _evict_gravity_well(self, well, width: int, height: int) -> None:
+        """The collapse kick: everything still inside the field is shoved
+        straight OUTWARD, linearly fading to nothing at the rim.
+
+        Always away from the core, so the collapse can never be the thing
+        that kills the player - it is the signal that the field let go, and a
+        free shove clear of a well that has just finished chewing through the
+        board. The craft gets it too (the shield is irrelevant here)."""
+        for asteroid in self._asteroids:
+            self._well_kicks(well, asteroid, asteroid.radius,
+                             GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+        for mine in self._mines:
+            self._well_kicks(well, mine, mine.radius,
+                             GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+        for ufo in self._ufos:
+            if well.within_pull_radius(ufo.x, ufo.y, ufo.radius,
+                                       width, height):
+                ufo.apply_push(*well.push_away(ufo.x, ufo.y, width, height))
+        self._well_kicks(well, self._craft, PLAYER_RADIUS, PLAYER_MAX_SPEED,
+                         width, height)
+
+    def _well_kicks(self, well, target, target_radius: float,
+                    max_speed: float, width: int, height: int) -> None:
+        """One outward nudge on anything that carries its own velocity."""
+        if not well.within_pull_radius(target.x, target.y, target_radius,
+                                       width, height):
+            return
+        dvx, dvy = well.push_away(target.x, target.y, width, height)
+        _add_velocity_and_clamp(target, dvx, dvy, max_speed)
+
     # ---------------------------------------------------------------- enemy fire
 
     def _resolve_ufo_projectile_hits(self, width: int, height: int) -> bool:
@@ -1332,6 +1615,8 @@ class GameState(GameModeState):
                 mine.draw(screen)
             for projectile in self._mine_projectiles:
                 projectile.draw(screen)
+            for well in self._wells:
+                well.draw(screen)
             # Debris and exhaust over the field, under the craft and beam:
             # an explosion reads as happening IN the world the craft flies
             # through, not on top of the player's own ship. (The list is

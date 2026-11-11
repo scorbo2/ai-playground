@@ -29,3 +29,16 @@ These aren't mine! All credit goes to https://ci.itch.io/arcade-sound-effects-pa
 |collect\_7|mine\_pulse|A non-activated mine "pulses" (scanning for targets)|
 |explosion\_4|mine\_detonate|A mine detonates|
 
+## The gravity well cues (added with the fifth weapon)
+
+The arcade pack above has nothing that sounds like "spacetime", so the two
+cues for the Gravity Wells weapon were synthesized in-project (stdlib `wave`)
+instead of being borrowed. They match the pack's format exactly: mono, 44100
+Hz, signed 16-bit PCM, peak amplitude ~7000, so the mixer levels sit in the
+same range as everything else in this folder.
+
+|Source|SuperAsteroids filename|Purpose|
+| --- | --- | --- |
+|synthesized (falling sweep + rising hiss)|gravity\_well\_activated|A gravity well is deployed at any power level (play once per space bar press)|
+|synthesized (sub-bass glide + low-passed crack)|gravity\_well\_collapsed|A gravity well reaches the end of its lifetime and collapses|
+
