@@ -25,14 +25,15 @@ current weapon one level (a different type switches at power 1).
 
 ### Gravity wells, in play
 
-Space plants a singularity 200 px in front of your nose. It does not travel,
-explode, or protect you: it holds that spot and bends everything nearby toward
-its crush core. Rocks, saucers, and mines that reach the core are consumed
-(rocks whole, mines detonated, saucers deleted). It pulls *you* too - a well is
-a slingshot and a hazard in the same keypress. When its lifetime runs out it
-collapses and flings whatever is still inside the field **outward**, so the
-well itself can never be what finally kills you; it kills you by dragging a
-rock into you instead.
+Space plants a singularity 200 px **behind your tail**. Like a shrapnel mine,
+you lay it and run: the well does not travel, explode, or protect you, it just
+holds that spot and bends everything nearby toward its crush core. Rocks,
+saucers, and mines that reach the core are consumed (rocks whole, mines
+detonated, saucers deleted). It pulls *you* too - a well is a slingshot and a
+hazard in the same keypress. When its lifetime runs out it collapses and
+flings whatever is still inside the field **outward**, so the well itself can
+never be what finally kills you; it kills you by dragging a rock into you
+instead.
 
 | Level | In-play cap | Pull radius | Pull | Core | Lifetime | Color |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -59,8 +60,9 @@ Gotchas worth knowing:
   stand-off, the 120/150/180 px fields of levels 1-3 cannot reach the ship that
   cast them. A level-4 field does reach back, and a parked ship eats its own
   core in about a second (drag tops out at ~3.9 px/frame against your 8
-  px/frame top speed, so thrusting away always wins). Level 5 is exempt
-  entirely;
+  px/frame top speed, so thrusting away always wins - and since wells now drop
+  astern, "away" is simply forward thrust, exactly what you are already doing).
+  Level 5 is exempt entirely;
 - what *will* kill you at every level is what the well drags into you. Rocks,
   saucers and mines all end up at the core - and if that is where you are
   standing, they arrive at speed;

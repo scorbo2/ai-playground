@@ -227,7 +227,7 @@ MINE_FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE - WATCH THOSE MINES!"
 # The fifth weapon. Where the other four each put a thing BETWEEN the craft
 # and the world (a projectile, a beam, a ring, a bomb), a gravity well puts a
 # region of CURVED SPACE in the world: each PRESS anchors a singularity a
-# fixed distance ahead of the craft's tip, it drags every hazard inside its
+# fixed distance astern of the craft's tail, it drags every hazard inside its
 # pull radius toward a crush core, and it consumes whatever reaches the core.
 # It fires on press (not charge), its in-play count is capped per power level
 # exactly like the mine weapon, and every number that matters lives in
@@ -250,15 +250,20 @@ MINE_FRIENDLY_FIRE_MESSAGE = "FRIENDLY FIRE - WATCH THOSE MINES!"
 #   - when a well expires it COLLAPSES: an inward-bursting particle flash and
 #     an outward eviction kick on everything still inside the field. The kick
 #     is always away from the core, so it never kills - it clears the board.
-# Deployed 200 px past the tip (215 px from the craft's center), not
-# point-blank. The stand-off is a difficulty ramp, not a safety net: levels 1-3
-# (fields of 120/150/180 px) cannot reach the caster at all, level 4's 220 px
-# field reaches back and eats a parked ship in about a second, and level 5's
-# caster is exempt by the perk. The distance is also a deliberate margin
-# against the craft's 8 px/frame top speed - flying into your own core should
-# be a decision (a third of a second of visible black hole approaching), not an
-# accident of thrusting forward while the fire button is held.
-GRAVITY_WELL_LAUNCH_DISTANCE = 200     # px ahead of the craft's tip
+# Deployed 200 px past the TAIL (215 px from the craft's center), not
+# point-blank. Aft, not ahead, so the deployment reads like a mine drop: you
+# lay the well and the very next thrust carries you out of it. The bearing is
+# cosmetic to the physics - the well is world-anchored and the stand-off from
+# the craft's center is the same 215 px either way. That stand-off is a
+# difficulty ramp, not a safety net: levels 1-3 (fields of 120/150/180 px)
+# cannot reach the caster at all, level 4's 220 px field reaches back and eats
+# a parked ship in about a second, and level 5's caster is exempt by the perk.
+# The distance is also a deliberate margin against the craft's 8 px/frame top
+# speed - sailing back onto your own core should be a decision (a third of a
+# second of visible black hole approaching, and it now arrives from BEHIND you,
+# off the stern), never an accident of thrusting forward while the fire button
+# is held.
+GRAVITY_WELL_LAUNCH_DISTANCE = 200     # px astern of the craft's tail
 # The pull strength actually applied to the craft is scaled down by this:
 # the player should feel dragged, not helplessly vacuumed. Deliberately NOT
 # zero - a well you can stand on with impunity is a free asteroid vacuum, and
@@ -297,7 +302,10 @@ GRAVITY_WELL_SELF_IMMUNE_POWER = 5
 # field, and they no longer reach the player who cast them. Every strength also
 # clears GRAVITY_WELL_STRENGTH_MIN (the friction/stall caveat above), and with
 # the launch stand-off (215 px) only the level-4 field reaches back to the
-# caster - the self-hazard arrives exactly where the weapon gets big.
+# caster - the self-hazard arrives exactly where the weapon gets big. The aft
+# anchor does not change that reach-back (the stand-off is identical either
+# way); it changes the escape, since the ship now starts inside the rim and
+# walks OUT of it under normal forward thrust instead of thrusting deeper in.
 GRAVITY_WELL_LEVEL_SPECS = (
     (1,    120, 0.08, 14, 240, MAGENTA),
     (2,    150, 0.11, 16, 300, MAGENTA),

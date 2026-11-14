@@ -6,9 +6,10 @@ world, while this one rewrites the local geography and lets the world come
 to it.
 
 Per the power-level table (game_constants -> GRAVITY_WELL_LEVEL_SPECS):
-  - each PRESS deploys exactly ONE well a fixed distance ahead of the craft's
-    tip (holding the bar does nothing - the owning state only fires on
-    KEYDOWN, same as the mine weapon);
+  - each PRESS deploys exactly ONE well a fixed distance BEHIND the craft's
+    tail (holding the bar does nothing - the owning state only fires on
+    KEYDOWN, same as the mine weapon). The aft anchor is deliberate: like a
+    shrapnel mine, you lay a well and immediately fly AWAY from it;
   - the in-play cap is per power level (1/2/3/unlimited/unlimited), and a
     press at the cap is BLOCKED - not a successful activation, so the owning
     state records no shot and plays no fire SFX;
@@ -49,18 +50,22 @@ class GravityWells(Weapon):
         return True
 
     def _deploy(self, craft) -> GravityWell:
-        """A fresh well anchored in the world at the craft's tip plus
-        GRAVITY_WELL_LAUNCH_DISTANCE along the current heading.
+        """A fresh well anchored in the world GRAVITY_WELL_LAUNCH_DISTANCE
+        AFT of the craft's tail, along the line of the current heading.
 
         The heading picks the spot; the well does NOT inherit the craft's
         velocity (a drifting singularity would wander out of the fight it was
-        thrown into). The launch point sits past the tip, never inside the
-        craft, so a deployment can never crush its own ship at point-blank.
+        thrown into). The anchor mirrors the mine weapon's rear drop: same
+        half-height offset, negated, so the well's center stays exactly 215 px
+        from the craft's center - the launch stand-off is unchanged, only its
+        bearing is. Point-blank self-crush is still impossible, and thrusting
+        forward after a deploy pulls the ship OUT of the field it just cast
+        instead of straight back into it.
         """
         rad = math.radians(craft.angle)
-        ahead = PLAYER_SHAPE_HEIGHT / 2 + GRAVITY_WELL_LAUNCH_DISTANCE
+        astern = PLAYER_SHAPE_HEIGHT / 2 + GRAVITY_WELL_LAUNCH_DISTANCE
         return GravityWell(
-            x=craft.x + math.cos(rad) * ahead,
-            y=craft.y + math.sin(rad) * ahead,
+            x=craft.x - math.cos(rad) * astern,
+            y=craft.y - math.sin(rad) * astern,
             power_level=self.power(),
         )

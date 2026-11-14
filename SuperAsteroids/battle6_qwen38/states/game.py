@@ -51,8 +51,8 @@ Pod SFX reuse the powerup ones: sfx/README defines the spawn/destroy/collect
 cues for "a powerup icon or fuel pod".
 
 Stage 11 (the fifth weapon - Gravity Wells): the only weapon that never
-strikes anything. One space press ANCHORS a singularity 200 px ahead of the
-craft's tip (capped 1/2/3/unlimited/unlimited in play by power level, holding
+strikes anything. One space press ANCHORS a singularity 200 px astern of the
+craft's tail (capped 1/2/3/unlimited/unlimited in play by power level, holding
 the bar does nothing); the well holds that spot for its whole lifetime
 (240-600 frames) while every hazard inside its pull radius (120-300 px,
 wrap-aware) gains velocity toward its crush core (14-24 px). Anything that
