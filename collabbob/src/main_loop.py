@@ -30,8 +30,16 @@ class FixedTimestepLoop:
 
     def run(self):
         """Run the loop forever, advancing a bounded accumulator per step."""
-        while True:
-            self._accumulator = min(self._accumulator + FIXED_DT, ACCUMULATOR_LIMIT)
+        clock = pygame.time.Clock()
+        running = True
+        while running:
+            dt = clock.tick(60) / 1000.0
+            
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+            
+            self._accumulator = min(self._accumulator + dt, ACCUMULATOR_LIMIT)
             if self._accumulator >= FIXED_DT:
                 self._accumulator -= FIXED_DT
                 self.step()
