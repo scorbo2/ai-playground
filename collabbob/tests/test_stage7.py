@@ -902,9 +902,15 @@ def test_pressingEscapeOnTheMap_shouldReturnToTacticalPlay(config_factory):
 
 
 def test_pressingMWhileAJumpIsAnimating_shouldNotOpenTheMap(config_factory):
-    """Spec: the map is blocked during a jump."""
+    """Spec: the map is blocked during a jump.
+
+    ``begin_jump`` now takes the burn acceleration: the jump mechanism (uncapped
+    thrust, boundary exemption) is model state, while the *sequence* lives in
+    ``src.model.jump`` and is driven by GameScene. Stage 8's own tests drive the
+    real sequence; this one only needs the gate, so it sets the flag directly.
+    """
     manager, game, loop = _build_game(config_factory)
-    game.game_state.begin_jump()
+    game.game_state.begin_jump(1.2)
     _press_key(loop, pygame.K_m)
     assert len(manager._stack) == 1, "the map may not open mid-jump"
     game.game_state.end_jump()

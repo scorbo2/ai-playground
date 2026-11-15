@@ -38,10 +38,25 @@ class _ConfigModel(BaseModel):
 
 
 class _JumpConfig(_ConfigModel):
+    """Hyperspace tunables.
+
+    ``spawn_distance`` is the [min, max] band, in world pixels from the planet,
+    at which the player arrives. ``transition_frames`` is the white-out that
+    covers the world swap (see DECISIONS.md, Stage 8).
+    """
+
     fuel_cost: float
     frames: int
     acceleration: float
+    transition_frames: int
+    spawn_distance: List[float]
 
+
+class _BoundaryWarningConfig(_ConfigModel):
+    """The "System boundary reached" banner: how long it shows, how often it repeats."""
+
+    message_frames: int
+    cooldown_frames: int
 
 class _StarConfig(_ConfigModel):
     count: int
@@ -56,7 +71,59 @@ class _TacticalConfig(_ConfigModel):
     planet_diameter: int
     launch_immunity_frames: int
     jump: _JumpConfig
+    boundary_warnings: _BoundaryWarningConfig
     stars: _StarConfig
+
+    @model_validator(mode="after")
+    def _check_jump_is_sane(self) -> "_TacticalConfig":
+        """Reject jump geometry that would spawn the player somewhere impossible.
+
+        These span three config keys (the jump band, the landing range, and the
+        system size), so they cannot be validated inside ``_JumpConfig`` alone.
+        A band that overlaps the landing range would drop the player on top of
+        the planet they are supposed to fly to; a band outside the system would
+        drop them straight through the boundary they cannot cross.
+        """
+        jump = self.jump
+        if jump.frames < 1:
+            raise ValueError("tactical.jump.frames must be at least 1")
+        if jump.transition_frames < 1:
+            raise ValueError("tactical.jump.transition_frames must be at least 1")
+        if jump.acceleration <= 0:
+            raise ValueError("tactical.jump.acceleration must be greater than 0")
+        if jump.fuel_cost < 0:
+            raise ValueError("tactical.jump.fuel_cost cannot be negative")
+
+        if len(jump.spawn_distance) != 2:
+            raise ValueError(
+                "tactical.jump.spawn_distance must be [min, max], "
+                f"got {jump.spawn_distance!r}"
+            )
+        low, high = jump.spawn_distance
+        if low >= high:
+            raise ValueError(
+                f"tactical.jump.spawn_distance must ascend, got [{low}, {high}]"
+            )
+        if low <= self.landing_range:
+            raise ValueError(
+                f"tactical.jump.spawn_distance[0] ({low}) must exceed "
+                f"tactical.landing_range ({self.landing_range}): arriving inside "
+                "landing range means the player never has to fly to the planet"
+            )
+        half = self.system_pixel_size / 2.0
+        if high > half:
+            raise ValueError(
+                f"tactical.jump.spawn_distance[1] ({high}) must stay inside half of "
+                f"tactical.system_pixel_size ({self.system_pixel_size}), otherwise "
+                "the player arrives outside the system they just jumped to"
+            )
+
+        warnings = self.boundary_warnings
+        if warnings.message_frames < 1 or warnings.cooldown_frames < 1:
+            raise ValueError(
+                "tactical.boundary_warnings frame budgets must be at least 1"
+            )
+        return self
 
 
 class _PlayerShipConfig(_ConfigModel):
@@ -212,7 +279,14 @@ def base_config() -> dict:
             "landing_range": 100,
             "planet_diameter": 40,
             "launch_immunity_frames": 120,
-            "jump": {"fuel_cost": 250, "frames": 180, "acceleration": 1.2},
+            "jump": {
+                "fuel_cost": 250,
+                "frames": 180,
+                "acceleration": 1.2,
+                "transition_frames": 45,
+                "spawn_distance": [400, 850],
+            },
+            "boundary_warnings": {"message_frames": 120, "cooldown_frames": 300},
             "stars": {"count": 150, "grey_min": 128, "grey_max": 255},
         },
         "combat": {

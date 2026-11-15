@@ -725,9 +725,16 @@ def test_landing_prompt_is_drawn_over_the_game_view_within_landing_range():
 
 
 def test_landing_prompt_absent_outside_landing_range():
-    """Too far from the planet means no prompt."""
+    """Too far from the planet means no prompt.
+
+    The ship sits at 600 px, not the 1500 px these tests used to use: Stage 8
+    added the system-boundary clamp (half of ``system_pixel_size`` is 1000), so
+    a ship parked outside the system is no longer a state the game can be in —
+    and it now earns a "System boundary reached" banner, which is exactly what
+    the old coordinate silently prevented from being asserted.
+    """
     config = base_config()
-    view = _make_tactical_view(config, position=(1500.0, 0.0), landing_range=100.0)
+    view = _make_tactical_view(config, position=(600.0, 0.0), landing_range=100.0)
     view.update()
     assert view.overlays.active_messages() == []
 
@@ -735,7 +742,7 @@ def test_landing_prompt_absent_outside_landing_range():
 def test_landing_prompt_tracks_the_ship_each_frame():
     """The prompt is recomputed from the shared state, not set once and forgotten."""
     config = base_config()
-    view = _make_tactical_view(config, position=(1500.0, 0.0), landing_range=100.0)
+    view = _make_tactical_view(config, position=(600.0, 0.0), landing_range=100.0)
     view.update()
     assert view.overlays.active_messages() == []
 

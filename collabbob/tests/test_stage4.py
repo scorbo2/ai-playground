@@ -200,13 +200,16 @@ def test_ship_is_painted_at_the_view_centre_whatever_its_world_position(config_f
 def test_planet_slides_opposite_to_the_ships_movement(config_factory):
     """The planet (at the world origin) pans across the view as the ship flies."""
     configs = load_config(config_factory())
-    diameter = int(_flat(configs)["tactical"]["planet_diameter"])
-    planet_color = tactical_view_module._PLANET_COLORS[diameter % len(tactical_view_module._PLANET_COLORS)]
-
     surface_a = pygame.Surface((1024, 768))
-    _view(configs, position=(0.0, -120.0)).draw(surface_a)
+    view_a = _view(configs, position=(0.0, -120.0))
+    view_a.draw(surface_a)
     surface_b = pygame.Surface((1024, 768))
     _view(configs, position=(60.0, -180.0)).draw(surface_b)
+
+    # Stage 8 made the planet colour a property of the *system*, not of the
+    # planet's diameter, so the expected colour comes from the same helper the
+    # renderer calls rather than from a re-derivation of its rule.
+    planet_color = tactical_view_module.planet_color_for(view_a.system_name)
 
     box_a = _bounding_box(_pixel_coords(surface_a, planet_color))
     box_b = _bounding_box(_pixel_coords(surface_b, planet_color))

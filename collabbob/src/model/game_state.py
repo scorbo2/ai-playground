@@ -26,6 +26,11 @@ from dataclasses import dataclass
 
 from src.model.stats import ShipStats, ship_stats_from_config
 
+# Every system's planet sits at the world origin; see the module docstring for
+# the coordinate convention. Shared with the tactical view so the view and the
+# jump rules cannot disagree about where the ground is.
+PLANET_WORLD_POSITION = (0.0, 0.0)
+
 
 @dataclass(frozen=True)
 class InputFrame:
@@ -82,10 +87,16 @@ class GameState:
         self._reverse_start: float = 0.0
         self._boundary_reached_this_frame: bool = False
 
-        # Jump plumbing (Stage 7 forward hook; the jump animation itself is
-        # built in Stage 8). Kept here as a plain flag so the system map can be
-        # blocked while a jump animates without the pure model owning gameplay.
+        # Jump plumbing. This model owns the *mechanism* of a jump (uncapped
+        # thrust along the heading, exemption from the system boundary); the
+        # timing and the eligibility rules live in src.model.jump.
         self._jumping: bool = False
+        self._jump_acceleration: float = 0.0
+        # Burn frames actually integrated. Counted here because this is the
+        # only object that knows whether a fixed timestep really burned fuel-less
+        # hyperspace thrust; the jump sequence asks for a count, it does not
+        # guess one. See src/model/jump.py.
+        self._jump_frames: int = 0
 
     # ------------------------------------------------------------------
     # Read-only accessors
@@ -119,6 +130,30 @@ class GameState:
         """Place the ship at world coordinates (used when entering a system)."""
         self._position = (float(x), float(y))
 
+    def spend_fuel(self, amount: float) -> None:
+        """Pay a one-off fuel cost (a jump, per the spec: charged up front)."""
+        self.fuel -= float(amount)
+
+    def reset_velocity(self) -> None:
+        """Stop the ship dead. Used on arrival: nobody lands at warp speed."""
+        self._velocity = (0.0, 0.0)
+
+    def refill_shields(self) -> None:
+        """Shields recharge to maximum for free whenever a system is entered."""
+        self.stats.shields = self.stats.max_shields
+
+    def arrive_in_system(self, x: float, y: float) -> None:
+        """Land in a freshly entered system: spawn point, stopped, shields up.
+
+        Grouped as one call because arriving always means all three: a jump
+        that resets the position but keeps 200 px/frame of hyperspace velocity
+        would fling the player straight back out of the system they just paid
+        250 fuel to reach.
+        """
+        self.set_position(x, y)
+        self.reset_velocity()
+        self.refill_shields()
+
     @property
     def reverse_state(self) -> str:
         return self._reverse_state
@@ -140,6 +175,14 @@ class GameState:
 
     def advance_frame(self) -> None:
         """Advance the simulation by exactly one fixed timestep (1/60 s)."""
+        self._boundary_reached_this_frame = False
+
+        if self._jumping:
+            # All input is ignored during a jump, and the jump is the only way
+            # to leave the system, so the boundary clamp is skipped too.
+            self._advance_jump_frame()
+            return
+
         if self._input.reverse_edge:
             self._begin_reverse_course()
 
@@ -150,10 +193,22 @@ class GameState:
             self._apply_continuous_rotation()
 
         if self._input.thrust:
-            self._apply_thrust()
+            self._apply_thrust(self.stats.acceleration_rate, self.stats.top_speed)
             self._consume_fuel()
 
-        self._integrate_position()
+        self._integrate_position(clamp_to_system=True)
+
+    def _advance_jump_frame(self) -> None:
+        """One frame of hyperspace burn: no speed cap, no boundary, no input.
+
+        The acceleration is supplied by the jump sequence rather than read from
+        the ship's stats, because the spec lets a jump exceed the usual top
+        speed, and the sequence cuts the burn partway through while the ship is
+        still in the animation.
+        """
+        self._apply_thrust(self._jump_acceleration, speed_cap=None)
+        self._integrate_position(clamp_to_system=False)
+        self._jump_frames += 1
 
     # ------------------------------------------------------------------
     # Control logic
@@ -194,12 +249,18 @@ class GameState:
         else:
             self.heading += rate
 
-    def _apply_thrust(self) -> None:
-        """Apply acceleration toward ``top_speed`` in the facing direction."""
-        accel = self.stats.acceleration_rate
+    def _apply_thrust(
+        self, acceleration: float, speed_cap: "float | None"
+    ) -> None:
+        """Apply ``acceleration`` in the facing direction, capped at ``speed_cap``.
+
+        ``speed_cap`` is ``None`` for the hyperspace burn, which the spec lets
+        exceed the ship's usual top speed.
+        """
+        accel = float(acceleration)
         vx, vy = self._velocity
         speed = math.hypot(vx, vy)
-        if speed >= self.stats.top_speed:
+        if speed_cap is not None and speed >= speed_cap:
             return  # already capped; adding would only introduce float wobble
 
         ax = accel * math.cos(math.radians(self.heading))
@@ -207,10 +268,10 @@ class GameState:
         new_vx = vx + ax
         new_vy = vy + ay
         new_speed = math.hypot(new_vx, new_vy)
-        if new_speed > self.stats.top_speed:
+        if speed_cap is not None and new_speed > speed_cap:
             # Rescale so the speed lands exactly on top_speed rather than
             # overshooting it by a hair.
-            scale = self.stats.top_speed / new_speed
+            scale = speed_cap / new_speed
             self._velocity = (new_vx * scale, new_vy * scale)
         else:
             self._velocity = (new_vx, new_vy)
@@ -221,12 +282,38 @@ class GameState:
         if self.fuel < 0.0:
             self.fuel = 0.0
 
-    def _integrate_position(self) -> None:
+    def _integrate_position(self, clamp_to_system: bool) -> None:
         """Newtonian drift: position advances by the current velocity."""
         self._position = (
             self._position[0] + self._velocity[0],
             self._position[1] + self._velocity[1],
         )
+        if clamp_to_system:
+            self._clamp_to_system()
+
+    def _clamp_to_system(self) -> None:
+        """Pin the ship to the system square, scrubbing off the outward speed.
+
+        The spec's rule is positional ("cannot move any further in that
+        direction") while still allowing thrust and fuel burn against the wall.
+        Zeroing the velocity component through the wall is what makes that
+        behave: otherwise a ship pinned for ten seconds accumulates a decade of
+        outward drift and slingshots away the instant it turns around. The
+        rejected alternative (leave velocity alone) is cheaper but wrong.
+        """
+        half = self.system_pixel_size / 2.0
+        x, y = self._position
+        vx, vy = self._velocity
+        clamped_x = min(max(x, -half), half)
+        clamped_y = min(max(y, -half), half)
+        if clamped_x != x:
+            vx = 0.0
+        if clamped_y != y:
+            vy = 0.0
+        if (clamped_x, clamped_y) != (x, y):
+            self._position = (clamped_x, clamped_y)
+            self._velocity = (vx, vy)
+            self._boundary_reached_this_frame = True
 
     # ------------------------------------------------------------------
     # Convenience geometry helpers (used later by tactical/HUD code)
@@ -260,17 +347,42 @@ class GameState:
         return self._boundary_reached_this_frame
 
     # ------------------------------------------------------------------
-    # Jump plumbing (Stage 8 owns the animation; this just tracks state)
+    # Jump plumbing
     # ------------------------------------------------------------------
     @property
     def is_jumping(self) -> bool:
-        """True while a jump animation is in progress."""
+        """True for the whole jump sequence: burn, white-out, and all."""
         return self._jumping
 
-    def begin_jump(self) -> None:
-        """Mark the start of a jump (all input ignored until :meth:`end_jump`)."""
+    @property
+    def jump_frames(self) -> int:
+        """How many fixed timesteps of hyperspace thrust have been integrated."""
+        return self._jump_frames
+
+    def begin_jump(self, acceleration: float) -> None:
+        """Start a hyperspace burn of ``acceleration`` px/frame squared.
+
+        Clears any latched control frame: the input layer is locked during a
+        jump, so a thrust key that was held when the jump began must not keep
+        feeding thrust into the model for the rest of the sequence.
+        """
+        self._input = InputFrame()
+        self._reverse_state = _ReverseState.IDLE
         self._jumping = True
+        self._jump_acceleration = float(acceleration)
+        self._jump_frames = 0
+
+    def set_jump_acceleration(self, acceleration: float) -> None:
+        """Change the burn mid-jump (the sequence cuts it to 0 for the white-out)."""
+        self._jump_acceleration = float(acceleration)
 
     def end_jump(self) -> None:
-        """Finish a jump animation and re-enable normal controls."""
+        """Finish a jump sequence and re-enable normal controls.
+
+        Clears the latched control frame again for symmetry: the input layer is
+        unlocked on this frame, and a stale frame left over from the sequence
+        would be applied as if the player had just pressed it.
+        """
         self._jumping = False
+        self._jump_acceleration = 0.0
+        self._input = InputFrame()

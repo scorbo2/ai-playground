@@ -12,14 +12,18 @@ the game view and the world (planet, stars) slides past it.
 
 from __future__ import annotations
 
+import math
+import zlib
 from typing import TYPE_CHECKING
 
 import pygame
 
 from src.camera import world_to_screen
-from src.hud import landing_prompt_text
+from src.effects import WarpTunnel
+from src.hud import VIEW_WIDTH, landing_prompt_text
 from src.input import Action, InputLayer
-from src.model.game_state import GameState
+from src.model.game_state import PLANET_WORLD_POSITION, GameState
+from src.model.jump import JumpPresentation, PHASE_BURN, PHASE_TRANSITION
 from src.model.starfield import Starfield
 from src.overlays import MessageOverlay
 from src.scene_manager import Scene
@@ -37,11 +41,30 @@ _VIEW_CENTER = (VIEW_WIDTH / 2.0, SCREEN_SIZE[1] / 2.0)
 # the whole surface would clobber it.
 _GAME_VIEW_RECT = pygame.Rect(0, 0, VIEW_WIDTH, SCREEN_SIZE[1])
 
-# Each system's planet sits at the world origin (see src.model.game_state).
-PLANET_WORLD_POSITION = (0.0, 0.0)
-
 _BG = (0, 0, 0)
-_PLANET_COLORS = [(90, 160, 90), (150, 110, 70), (110, 90, 140)]
+_PLANET_COLORS = [(90, 160, 90), (150, 110, 70), (110, 90, 140), (70, 130, 160), (170, 150, 90)]
+
+# Stars smear into lines during a jump. The cap exists because a jump tops out
+# above 200 px/frame: an uncapped smear is a solid white rectangle.
+_MAX_STAR_STREAK = 180
+# A smear may start off-screen and still cross the view, so the cull box is
+# padded by the longest possible streak rather than by the view edge.
+_STREAK_CULL_MARGIN = _MAX_STAR_STREAK
+
+# "System boundary reached" is pure copy, so it lives next to the code that
+# shows it; its durations come from tactical.boundary_warnings in config.
+BOUNDARY_WARNING_TEXT = "System boundary reached"
+
+
+def planet_color_for(system_name: str) -> "tuple[int, int, int]":
+    """A stable planet colour per system name.
+
+    ``zlib.crc32`` rather than ``hash()``: Python randomises string hashing per
+    process, so ``hash()`` would repaint every planet every launch and make the
+    colour impossible to assert on (see the Stage 7 hash-seed note in
+    DECISIONS.md - same trap, different module).
+    """
+    return _PLANET_COLORS[zlib.crc32(system_name.encode("utf-8")) % len(_PLANET_COLORS)]
 
 
 class TacticalView:
@@ -67,13 +90,43 @@ class TacticalView:
         # Stars live in view space and are scrolled by the ship's velocity, so
         # the box must cover the taller axis of the view or the top and bottom
         # of the game view would be star-free.
-        self.starfield = Starfield(
+        self.starfield = self._build_starfield()
+        # Hyperspace presentation. ``jump`` is published by GameScene each
+        # frame from the jump controller; the view never asks the controller
+        # anything, so it cannot start making gameplay decisions.
+        self.jump = JumpPresentation()
+        self.warp = WarpTunnel(
+            count=int(self.configs["tactical"]["stars"]["count"]),
+            max_radius=math.hypot(VIEW_WIDTH, SCREEN_SIZE[1]) / 2.0,
+            rng=self.game_state.rng,
+        )
+        # Which system is being rendered: drives the planet colour, and is set
+        # by notify_system_changed() on arrival.
+        self.system_name = "Alpha"
+        self._boundary_warning_cooldown = 0
+        # Cached, unrotated blocky shuttle drawn at the ship's length/width.
+        self._ship_surface = self._build_ship_surface()
+
+    def _build_starfield(self) -> Starfield:
+        """A fresh sky: 150 stars covering the taller axis of the game view."""
+        return Starfield(
             count=int(self.configs["tactical"]["stars"]["count"]),
             half_extent=max(VIEW_WIDTH, SCREEN_SIZE[1]) / 2.0,
             rng=self.game_state.rng,
         )
-        # Cached, unrotated blocky shuttle drawn at the ship's length/width.
-        self._ship_surface = self._build_ship_surface()
+
+    def notify_system_changed(self, system_name: str) -> None:
+        """The player just arrived somewhere else: new sky, new planet, new tunnel.
+
+        A jump that kept the old starfield would show the player flying back
+        into the system they just fled at 200 px/frame, then stopping dead.
+        Regenerating the sky (same 150-star invariant) is the visual half of
+        the world swap the jump model performs under the flash.
+        """
+        self.system_name = system_name
+        self.starfield = self._build_starfield()
+        self.warp.reset()
+        self.overlays.set_sticky(None)
 
     # ------------------------------------------------------------------
     # Event + update plumbing (Stage 5 input layer)
@@ -106,7 +159,11 @@ class TacticalView:
         vx, vy = self.game_state.velocity
         self.starfield.update(vx, vy)
 
+        if self.jump.in_hyperspace:
+            self.warp.advance(self._warp_intensity())
+
         self._update_landing_prompt()
+        self._update_boundary_warning()
         self.overlays.update()
 
         for action in actions:
@@ -119,11 +176,37 @@ class TacticalView:
         self.overlays.show(text, duration_frames)
 
     def _update_landing_prompt(self) -> None:
-        """Keep the landing prompt visible while the ship is in landing range."""
+        """Keep the landing prompt visible while the ship is in landing range.
+
+        Suppressed in hyperspace: the jump model refuses a jump that starts
+        inside landing range and spawns the player well outside it, so the
+        prompt *should* be impossible to see mid-jump. "Should" is what the
+        pixel test that pins this behaviour exists for.
+        """
+        if self.jump.in_hyperspace:
+            self.overlays.set_sticky(None)
+            return
         planet_x, planet_y = PLANET_WORLD_POSITION
         distance = self.game_state.distance_from_point(planet_x, planet_y)
         prompt = landing_prompt_text(distance, self.game_state.landing_range)
         self.overlays.set_sticky(prompt)
+
+    def _update_boundary_warning(self) -> None:
+        """Banner the boundary message at most once per configured cooldown.
+
+        The model reports boundary contact on every frame the ship is pressed
+        against an edge, which would otherwise re-arm the banner every frame;
+        the spec's "at most once every five seconds" is this cooldown, and its
+        length comes from config, not a literal.
+        """
+        self._boundary_warning_cooldown = max(0, self._boundary_warning_cooldown - 1)
+        if self._boundary_warning_cooldown > 0:
+            return
+        if not self.game_state.boundary_reached_this_frame():
+            return
+        warnings = self.configs["tactical"]["boundary_warnings"]
+        self.overlays.show(BOUNDARY_WARNING_TEXT, int(warnings["message_frames"]))
+        self._boundary_warning_cooldown = int(warnings["cooldown_frames"])
 
     def on_action(self, action: Action) -> None:
         """Dispatch a discrete action from the input layer.
@@ -157,21 +240,72 @@ class TacticalView:
         self._draw_stars(surface)
         self._draw_planet(surface)
         self._draw_ship(surface)
+        self._draw_warp_tunnel(surface)
         self.overlays.draw(surface)
 
     def _draw_stars(self, surface: "pygame.Surface") -> None:
-        """Stars are single pixels in view space, culled to the game-view rect."""
+        """Stars are single pixels in view space, culled to the game-view rect.
+
+        During a jump each star becomes a smear trailing along the direction of
+        travel, its length the ship's speed capped at ``_MAX_STAR_STREAK``: the
+        smear is what tells the player this is not ordinary thrusting, and the
+        cap is what keeps the game view from becoming one solid white block.
+        """
+        streak = self._star_streak_vector()
+        if streak is None:
+            for star in self.starfield.stars:
+                sx = int(round(_VIEW_CENTER[0] + star.x))
+                sy = int(round(_VIEW_CENTER[1] + star.y))
+                if 0 <= sx < VIEW_WIDTH and 0 <= sy < SCREEN_SIZE[1]:
+                    surface.set_at((sx, sy), star.color)
+            return
+
+        offset_x, offset_y = streak
         for star in self.starfield.stars:
-            sx = int(round(_VIEW_CENTER[0] + star.x))
-            sy = int(round(_VIEW_CENTER[1] + star.y))
-            if 0 <= sx < VIEW_WIDTH and 0 <= sy < SCREEN_SIZE[1]:
-                surface.set_at((sx, sy), star.color)
+            sx = _VIEW_CENTER[0] + star.x
+            sy = _VIEW_CENTER[1] + star.y
+            if not (-_STREAK_CULL_MARGIN <= sx <= VIEW_WIDTH + _STREAK_CULL_MARGIN
+                    and -_STREAK_CULL_MARGIN <= sy <= SCREEN_SIZE[1] + _STREAK_CULL_MARGIN):
+                continue
+            pygame.draw.line(surface, star.color, (sx, sy), (sx + offset_x, sy + offset_y), 1)
+
+    def _star_streak_vector(self) -> "tuple[float, float] | None":
+        """The smear offset for a star, or None to draw plain single pixels.
+
+        Returns None outside hyperspace and in the single frame after arrival
+        where velocity has already been zeroed but the jump phase has not ended.
+        """
+        if not self.jump.in_hyperspace:
+            return None
+        vx, vy = self.game_state.velocity
+        speed = math.hypot(vx, vy)
+        if speed < 1e-9:
+            return None
+        length = min(speed, _MAX_STAR_STREAK) / speed
+        return (-vx * length, -vy * length)
+
+    def _draw_warp_tunnel(self, surface: "pygame.Surface") -> None:
+        """Hyperspace streaks, poured over everything else in the view."""
+        if not self.jump.in_hyperspace:
+            return
+        self.warp.draw(surface, _VIEW_CENTER)
+
+    def _warp_intensity(self) -> float:
+        """Tunnel intensity: builds through the burn, collapses through the flash.
+
+        The white-out phase ramps *down* so the tunnel dies at the same rate the
+        flash fades, rather than still blazing on arrival.
+        """
+        if self.jump.phase == PHASE_BURN:
+            return self.jump.progress
+        if self.jump.phase == PHASE_TRANSITION:
+            return 1.0 - self.jump.progress
+        return 0.0
 
     def _draw_planet(self, surface: "pygame.Surface") -> None:
         """Planet sits at the world origin, so the camera slides it around."""
         diameter = float(self.configs["tactical"]["planet_diameter"])
-        # Deterministic colour pick so the planet looks consistent within a game.
-        color = _PLANET_COLORS[int(diameter) % len(_PLANET_COLORS)]
+        color = planet_color_for(self.system_name)
         screen_pos = world_to_screen(
             PLANET_WORLD_POSITION[0], PLANET_WORLD_POSITION[1],
             self.game_state.position, _VIEW_CENTER,
@@ -180,7 +314,14 @@ class TacticalView:
                            int(diameter / 2.0))
 
     def _draw_ship(self, surface: "pygame.Surface") -> None:
-        """The player's ship is always drawn at the centre of the game view."""
+        """The player's ship is always drawn at the centre of the game view.
+
+        Except during the white-out, when the ship is not in this universe any
+        more. Leaving it on screen would be the giveaway that the arrival is a
+        teleport rather than a journey.
+        """
+        if not self.jump.ship_visible:
+            return
         rotated = pygame.transform.rotate(self._ship_surface, -self.game_state.heading_degrees)
         rect = rotated.get_rect(center=_VIEW_CENTER)
         surface.blit(rotated, rect)

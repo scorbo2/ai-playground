@@ -449,3 +449,200 @@ now covered by a test. The stage gate grew from 155 to 231 tests
   ring's DFS ordering still draws a few long "spoke" edges across the middle of
   the map: correct, uncrossed, but visually busy — a radial/tree layout is the
   upgrade path if that ever bothers a human.
+
+## Stage 8 — Jumping (hyperspace)
+
+- **The jump is a three-phase sequence, and the arrival happens inside a white-out.**
+  The spec asks only for "the player's craft accelerating greatly in the facing
+  direction for three seconds". The arrival was therefore given a second phase:
+  `tactical.jump.frames` (180) frames of uncapped burn, then
+  `tactical.jump.transition_frames` of screen flash during which the world is
+  swapped. This is a **deliberate deviation, and it is load-bearing rather than
+  decorative**: the swap (new system, new starfield, ship teleported 400-850 px,
+  velocity zeroed, shields refilled) is a discontinuity, and a discontinuity
+  under a fully opaque white screen is invisible. Without it the player watches
+  the universe teleport. `blind_frames_for()` is the single source of timing
+  truth: the model swaps the world on exactly the frame `flash_alpha()` reaches
+  255, and `test_advance_shouldSwapTheWorldOnTheFrameTheFlashTurnsFullyOpaque`
+  pins both sides of that seam.
+  *Rejected alternatives:* cutting straight from burn to arrival (what the spec
+  literally says — reads as a glitch, and the old system's departure is jarring);
+  a fade-to-black (slower, and the arrival then fades *in* over the old system);
+  a wipe/shockwave alone (the shockwave is kept, but only on the way out of the
+  flash, where it is actually visible).
+- **The flash covers the whole window, HUD included; the shockwave starts at the ship.**
+  `GameScene` draws the flash *after* the HUD, because a flash that politely
+  skipped the right-hand third reads as a rendering bug. `FlashOverlay` therefore
+  takes a `region` (what gets whited out) and an `origin` (where the boom starts):
+  the game-view centre, not the window centre. Ringing the empty middle of the
+  window is how you tell a player an effect was pasted on rather than caused.
+- **`transition_frames` is config, and it differs by difficulty** (easy 36,
+  medium 45, hard 60). It is presentation, but it is also the only part of a jump
+  during which the player is helpless, so making it a knob is honest — and
+  Stage 14's "no hard-coding" sweep gets one more number that demonstrably moves.
+- **`spawn_distance` is a config band, validated against two other keys.**
+  `tactical.jump.spawn_distance: [min, max]` (world px from the planet). The
+  loader rejects a band that starts at or inside `tactical.landing_range` (the
+  player must fly to the planet, per spec) or that ends beyond
+  `tactical.system_pixel_size / 2` (arriving outside the system you just paid to
+  reach). Both cross-field checks live in `_TacticalConfig`, because
+  `_JumpConfig` cannot see the other two keys. Bearing is uniform over the whole
+  compass; distance is uniform in the band (so outer rings are sparser per unit
+  area — the constraint the config expresses is a distance band, not an area).
+- **The burn is counted by the model, not by the jump sequence.** **(fixed)**
+  The first cut counted burn frames in `JumpController`, which silently delivered
+  **179** frames of a "180 frame" animation: the fixed timestep on which `J` is
+  drained has *already* called `advance_frame()` before the scene sees the action,
+  so the request frame is not a burn frame. `GameState` now counts its own
+  integrated hyperspace frames (`jump_frames`) and the controller only supplies
+  the target. Visible symptom of the bug: terminal speed off by one increment of
+  the jump acceleration; invisible in play, fatal for the "frame-exact" gate.
+- **A phase's first frame is the frame it begins on** (`_frames_elapsed = 1` in
+  `_enter_phase`). The flash and the transition phase must advance in lockstep,
+  and `GameScene._advance_jump()` ticks the flash *before* the controller for the
+  same reason. Consequence, stated so it does not look like an off-by-one: the
+  whole sequence takes `frames + transition_frames - 1` pumped timesteps after the
+  request, and `frames + transition_frames` counting the frame `J` was pressed on.
+- **Two jump locks, deliberately separate** (Stage 7 flagged this). `GameState.is_jumping`
+  is the queryable model state (the map gate reads it, the boundary clamp skips it);
+  `InputLayer.locked` suppresses controls and drains queued edges. Stage 8 sets
+  both: lock on the accepted request, unlock on `EVENT_JUMP_ENDED`.
+- **`begin_jump()` clears the latched control frame** (and `end_jump()` does again
+  for symmetry). The input layer is locked during a jump, so a thrust key held
+  when `J` landed used to keep feeding ordinary *capped* thrust into the jump: the
+  ship then accelerated at the wrong rate for all 180 frames. In the real loop the
+  effect is invisible (both burns point along the heading); the terminal-speed test
+  is what catches it.
+- **Boundary clamping lands in Stage 8**, because the spec's jump exemption is
+  meaningless without the wall: the ship is pinned to
+  `±system_pixel_size / 2` and the *velocity component through the wall* is zeroed.
+  *Rejected alternative:* clamp position only and keep velocity — the ship then
+  accumulates a decade of outward drift while pinned against an edge and
+  slingshots away the moment it turns around. The spec's rule ("cannot move any
+  further in that direction", thrust and fuel burn still allowed) is positional;
+  zeroing the normal component is what makes that behave.
+  `boundary_reached_this_frame` is set only on frames where a clamp actually moved
+  something, so a ship drifting parallel to an edge is not "in contact" for banner
+  purposes.
+- **The boundary banner's repeat policy is config**: `tactical.boundary_warnings`
+  `{message_frames: 120, cooldown_frames: 300}`. The spec's "at most once every
+  five seconds" is the cooldown; "briefly" is the message duration. `MessageOverlay`
+  deliberately owns no repeat policy (Stage 6 decision), so the cooldown lives in
+  `TacticalView._update_boundary_warning()`.
+- **The exact-fuel game over is a seam, not an implementation.** Spec: `J` with
+  *exactly* the jump's fuel cost is an immediate game over. Stage 13 owns the
+  game-over screen, so Stage 8 guarantees only what it can see: no jump, no fuel
+  spent, and `GameScene.pending_game_over = True` for Stage 13 to consume. Two
+  tests pin it, including the ordering trap below.
+- **Blocker check order is load-bearing: the fuel checks come last.** The
+  exact-fuel rule is a death sentence, so it must never fire for a jump that was
+  already illegal for an innocent reason. A player nudging the planet with exactly
+  250 fuel must be told about the planet. Order: already jumping → no destination
+  → destination not adjacent → inside landing range → insufficient fuel → exact
+  fuel. `test_request_withExactlyTheJumpCost_butInsideLandingRange_shouldReportThePlanetNotTheFuel`
+  is the only thing standing between a future refactor and a murderous one.
+- **"No system selected" is silent.** The spec says `J` "does nothing" in that
+  case, so no banner. The blockers that carry copy are the two a player can cause
+  and be confused by (`insufficient fuel`, `Cannot jump this close to the planet`);
+  `already_jumping` and `invalid_destination` are unreachable through legal play.
+- **Selection is cleared on arrival, not on request**, so the HUD's nav line keeps
+  reading `Hyperspace / Bravo` for the whole three-second burn and only then falls
+  back to `No destination`. The spec only requires that no selection survives a
+  jump; showing the destination during the animation is the difference between a
+  dashboard and a blank one.
+- **Arrival regenerates the starfield and repaints the planet per system.** A jump
+  that kept the old sky would show the player flying *back* into the system they
+  just fled at 200 px/frame and stopping dead. 150-star invariant holds (the same
+  `Starfield` contract, new draws from `GameState.rng`). Planet colour is now
+  `planet_color_for(system_name)` via `zlib.crc32`, not the planet's diameter:
+  **`hash()` must not be used here** — Python randomises string hashing per
+  process, so every planet would repaint every launch and no test could assert on
+  it. Same trap as Stage 7's `PYTHONHASHSEED` note, different module.
+- **`JumpController` owns policy, `GameState` owns mechanism.** The controller
+  decides *whether* (rules), *how long* (phases), and *what happens on arrival*
+  (reveal, spawn, refill); `GameState` provides uncapped thrust
+  (`set_jump_acceleration`, including cutting it to 0 for the white-out) and the
+  boundary exemption. The burn's acceleration is never read from
+  `player_ship.acceleration_rate`, so a jump can exceed `top_speed` without
+  touching the normal flight model — Stage 3's "60 frames of thrust reaches
+  exactly 5.0" tests are untouched.
+- **The white-out freezes the burn but does not zero velocity.** The ship coasts
+  through the flash at its terminal jump speed (~216 px/frame) and *then* arrives
+  stopped. Cutting the burn is the sequence's business; killing velocity during
+  flight would contradict the Newtonian model for no visible reason (the screen is
+  white). `arrive_in_system()` is deliberately one call bundling
+  spawn + velocity reset + shield refill: a jump that reset the position but kept
+  hyperspace velocity would fling the player back out of the system they paid for.
+- **Audio: two new generated buffers, built lazily, gains in code for now.**
+  `play_jump_spinup()` (exponential frequency ramp 130→1150 Hz — exponential
+  because equal time spans must cover equal musical intervals, a linear ramp sounds
+  like a siren) and `play_thunderclap()` (crack of low-passed noise + 46 Hz rumble,
+  fast attack / exponential tail). Generated on first use, not at construction:
+  ~150k samples of pure Python maths would cost the title screen half a second for
+  a sound many runs never trigger. Thunderclap noise uses a fixed-seed `Random`, so
+  the buffer is byte-identical per run and *can* be digest-pinned. Gains stay in
+  code (`_JUMP_SPINUP_GAIN`, `_THUNDERCLAP_GAIN`) matching Stage 2's confirm beep;
+  **Stage 12 owns moving every gain into config** — it is the dedicated audio pass,
+  and adding a half-populated `audio` section now would collide with it.
+- **Hyperspace presentation: warp tunnel + smeared stars, view-space.** `WarpTunnel`
+  streaks grow *multiplicatively* (`radius *= 1 + speed(intensity)`) because
+  accelerating outward is the perspective cue that the camera is moving *into* a
+  tunnel rather than sliding across one; count is invariant like the starfield's,
+  and `reset()` re-seeds near the vanishing point on arrival. Ordinary stars are
+  drawn as smears along the velocity vector, capped at `_MAX_STAR_STREAK` (180 px) —
+  an uncapped smear at 216 px/frame is a solid white rectangle. Streak culling pads
+  by that cap, not by the view edge, or a smear that starts off-screen and crosses
+  the view gets culled away.
+- **`TacticalView` hides the ship only while the flash is opaque**
+  (`JumpPresentation.ship_visible` is false for the first `BLIND_FRACTION` of the
+  transition, true for the fade). Leaving it on screen is the giveaway that the
+  arrival is a teleport rather than a journey. Hiding it for the *whole* white-out
+  was the same bug wearing a different hat: the ship then popped into existence on
+  the last frame. The fade is the arrival being revealed, and the player is part of
+  that arrival. The ship is also *not* drawn between the flash and the shockwave
+  during the burn: warp streaks paint over it deliberately.
+- **The real-loop tests pin the world seed, and one guard test says why.** Those
+  tests say `select("Bravo")` rather than "select some neighbour of Alpha", because
+  a fixed expectation reads better than a computed one — but which systems are
+  neighbours is a property of the graph generator. With `rng.seed: null` (the
+  shipped default) every run drew a different map and those tests were ticking over
+  on luck. `WORLD_SEED = 4242` in `tests/test_stage8.py` plus
+  `test_thePinnedWorldSeed_shouldOfferEveryHopTheIntegrationTestsTake` turns that
+  luck into a checked assumption that fails in one place, by name.
+- **Fixture trap, worth knowing before Stage 9 writes more config tests:**
+  `config_factory` *rewrites the three temp config files every time it is called*.
+  A pre-call such as `config_factory(overrides={"rng.seed": 505})` followed by a
+  helper that calls `config_factory()` again silently loses the override — three
+  Stage 8 tests were configured that way and were running unseeded. Pass overrides
+  through the helper, once.
+- **`stage8_jump_sequence.png` is committed at the project root** (see
+  `stage6_screenshot.png` for the precedent), generated by
+  `scripts/capture_jump_frames.py --sheet`. An animation is the one part of this
+  stage no assertion can vouch for; a contact sheet is reviewable in a way a
+  300-line pixel test is not.
+- **Jump presentation syncs in `update()`; the HUD nav line syncs in `draw()`.** Each
+  seam syncs where its state changes. `update()` is the only thing that advances a
+  jump, and `TacticalView.update()` *consumes* the presentation (warp intensity), so
+  syncing at draw time left every consumer a frame stale. The nav line is the
+  opposite case: it changes while `update()` is frozen under the map modal, so only
+  a draw-time sync makes a destination chosen on the map appear immediately.
+  Test consequence, documented in the test: `hud.nav_selected_name` assertions must
+  call `draw()` first.
+- **Not implemented in Stage 8, by design, with named owners:** NPC despawn on jump
+  (Stage 10 — hook is `EVENT_ARRIVED`, already noted at the call site), the
+  game-over transition for the exact-fuel case (Stage 13 —
+  `GameScene.pending_game_over`), damage during the jump (Stage 11 — no immunity is
+  granted anywhere in this stage, per spec), and the config-driven audio gains
+  (Stage 12).
+- **Gotchas for the next stages.** (1) `GameState.jump_frames` is reset by
+  `begin_jump()` and is meaningless once `is_jumping` is false — Stage 13's
+  stranded-fuel rule must read the fuel, not the frame count. (2) `pending_game_over`
+  is a *latch*, not an event: Stage 13 must clear it when it shows the game-over
+  screen, or the player dies again next frame. (3) The starfield now consumes
+  `GameState.rng` draws on every arrival, so the arrival spawn draw lands at a
+  different point in the sequence than a naive reading of "one draw per jump"
+  suggests — relevant to Stage 9/10 determinism tests (ship spawn chance per
+  system is seeded by system index, so keep it off this stream or thread a
+  separate RNG, per the Stage 7 note). (4) `FlashOverlay.advance()` is only ticked
+  while `GameScene` is the top scene; if Stage 13 lets a modal open during the
+  white-out, the flash will hang mid-frame.

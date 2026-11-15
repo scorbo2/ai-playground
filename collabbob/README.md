@@ -55,8 +55,12 @@ timestep. There is no fullscreen option.
   your destination, click it again to clear the selection. `ESC` (or `M`) closes
   the map and returns you to the tactical view; the simulation is paused while
   the map is open.
-- `J` — jump to the currently selected system (requires a selection and
-  sufficient fuel). *Not live until Stage 8.*
+- `J` — jump to the selected system. Costs `tactical.jump.fuel_cost` fuel, paid
+  up front, and takes `tactical.jump.frames` frames of acceleration followed by
+  a short screen flash during which you arrive. You cannot steer or cancel
+  mid-jump, and `M` stays closed until you land. `J` does nothing if no system
+  is selected, tells you "insufficient fuel" if you cannot pay, and refuses if
+  you are inside landing range of the planet.
 - `L` — land at the current planet to open the spaceport interface.
   *Not live until Stage 9; the on-screen "Press L to land here" prompt is.*
 - `T` — scan for ships in the current system (HUD "nearest ship" readout).
@@ -84,8 +88,17 @@ timestep. There is no fullscreen option.
   system you are standing in; the current system itself is never selectable, and
   clicking a selected system clears the selection. The HUD nav line reflects the
   choice (`No destination` becomes `Hyperspace / Bravo`).
-- Jumping is Stage 8: `J` is registered but does nothing yet, so the destination
-  you pick on the map cannot be travelled to in this build.
+- Jumping is how you travel: pick a neighbour on the map (`M`), press `J`, and
+  sit back while the ship burns for three seconds and the screen goes white. The
+  flash is not decoration — your arrival (a new sky, a new planet, a new spawn
+  point well away from that planet) happens under it. Fuel comes out of your tank
+  the instant the jump starts, shields refill to full on arrival for free, and the
+  system you land in permanently reveals everything linked to it.
+- You cannot jump from inside landing range of a planet — fly out first. And you
+  cannot leave a system any other way: hitting the edge of the system stops the
+  ship and shows "System boundary reached" (at most once every
+  `tactical.boundary_warnings.cooldown_frames` frames). The one exception is a
+  jump: once you are burning, the boundary no longer applies.
 - Land with `L` at a planet to reach the spaceport, accept cargo/passenger
   missions and ship upgrades, then launch with the `Launch!` button.
 - Reach `economy.win_credits` (1,000,000 credits) to win the game.
@@ -125,6 +138,69 @@ Impossible combinations (e.g. `connections_min` above `connections_max`, or
 `system_count: 27`) are rejected at startup rather than crashing the game when
 you start a new game. The RNG seed in `rng.seed` doubles as the world seed: set
 it to a number to get the same 26-system map every run.
+
+### Jumping and the tactical envelope
+
+The `tactical.jump` block controls the trip and where you turn up:
+
+```json
+"jump": {
+  "fuel_cost": 250,
+  "frames": 180,
+  "acceleration": 1.2,
+  "transition_frames": 45,
+  "spawn_distance": [400, 850]
+},
+"boundary_warnings": {"message_frames": 120, "cooldown_frames": 300}
+```
+
+- `fuel_cost` — charged in full the moment the jump starts, never refunded.
+- `frames` — how long the ship accelerates, in fixed timesteps (180 = 3 seconds).
+  The burn ignores `player_ship.top_speed`; that is what makes a jump feel like a
+  jump.
+- `acceleration` — px/frame² during the burn. Terminal speed is roughly
+  `acceleration * frames`.
+- `transition_frames` — the white-out. The world swap happens on the frame the
+  flash goes fully opaque, so the arrival is never visible. Raise it for a more
+  theatrical arrival, lower it for a snappier one; 36 (easy) to 60 (hard).
+- `spawn_distance` — the `[min, max]` band, in pixels from the planet, at which
+  you arrive. The bearing is random.
+
+`tactical.boundary_warnings` sets how long the "System boundary reached" banner
+stays up (`message_frames`) and how long before it may appear again
+(`cooldown_frames`, 300 = five seconds).
+
+Two of these are cross-checked against the rest of `tactical` at startup, because
+a band the game could not honour would otherwise misplace the player mid-jump:
+`tactical.jump.spawn_distance[0]` must exceed `tactical.landing_range` (you are
+supposed to fly to the planet), and `spawn_distance[1]` must stay within half of
+`tactical.system_pixel_size` (you are not supposed to arrive outside the system
+you just paid to reach).
+
+### Seeing the jump
+
+The whole effect in one picture (`stage8_jump_sequence.png`), left to right, top
+to bottom:
+
+![The jump sequence: approach, star smears, warp tunnel, white-out, fade, arrival](stage8_jump_sequence.png)
+
+Stars stretch into streaks as the burn builds, the streaks become a tunnel racing
+out of a vanishing point, the screen whites out (that white-out is what hides the
+world swap — note the new sky and the reset HUD under the fading frames), and the
+ship is uncovered by the fade rather than popped in at the end.
+
+To regenerate those frames, or to grab frames of your own tweaks:
+
+```bash
+python scripts/capture_jump_frames.py --sheet stage8_jump_sequence.png  # one sheet
+python scripts/capture_jump_frames.py jump_frames                       # individual frames
+```
+
+The script is deterministic: one `rng.seed` fixes the world graph, the gameplay
+stream (starfield, arrival bearing) is a separate generator seeded from it, and
+neither is touched by wall-clock time. So the same command always reproduces the
+same pictures byte for byte — handy when a tweak to `acceleration` or
+`transition_frames` needs comparing side by side.
 
 ## Tests
 

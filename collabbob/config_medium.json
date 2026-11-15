@@ -38,12 +38,21 @@
     "jump": {
       "fuel_cost": 250,
       "frames": 180,
-      "acceleration": 1.2
+      "acceleration": 1.2,
+      "transition_frames": 45,
+      "spawn_distance": [
+        400,
+        850
+      ]
     },
     "stars": {
       "count": 150,
       "grey_min": 128,
       "grey_max": 255
+    },
+    "boundary_warnings": {
+      "message_frames": 120,
+      "cooldown_frames": 300
     }
   },
   "combat": {
