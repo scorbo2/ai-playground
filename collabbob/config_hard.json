@@ -1,0 +1,70 @@
+{
+  "rng": { "seed": null },
+  "new_game": {
+    "starting_credits": 20000
+  },
+  "player_ship": {
+    "fuel_capacity": 1000,
+    "passenger_space": 4,
+    "cargo_room": 15,
+    "shields": 35,
+    "armor": 70,
+    "weapon_power": 5,
+    "weapon_fire_rate": 0.5,
+    "turn_rate_deg_per_sec": 140,
+    "weapon_range": 1000,
+    "acceleration_rate": 0.12,
+    "top_speed": 4,
+    "length": 38,
+    "width": 18
+  },
+  "upgrade_steps": {
+    "shields": 75,
+    "armor": 140,
+    "engine_percent": 25,
+    "weapon_damage": 18,
+    "fuel": 350,
+    "cargo": 25,
+    "passenger": 6
+  },
+  "tactical": {
+    "system_pixel_size": 1800,
+    "fuel_burn_per_frame": 0.4,
+    "landing_range": 80,
+    "planet_diameter": 36,
+    "launch_immunity_frames": 100,
+    "jump": {
+      "fuel_cost": 450,
+      "frames": 180,
+      "acceleration": 1.5
+    },
+    "stars": {
+      "count": 150,
+      "grey_min": 100,
+      "grey_max": 255
+    }
+  },
+  "combat": {
+    "projectile_speed_bonus": 6,
+    "projectile_radius": 3,
+    "pirate_bounty": 12000,
+    "bobber_bounty": 6000,
+    "localhoster_bounty": 6000
+  },
+  "economy": {
+    "win_credits": 1000000,
+    "fuel_cost_per_unit": 2.5,
+    "repair_cost_per_point": 6,
+    "upgrade_base_cost": 2500,
+    "upgrade_cost_multiplier": 3,
+    "upgrade_max_level": 5,
+    "upgrade_offers_min": 2,
+    "upgrade_offers_max": 4,
+    "missions_min": 3,
+    "missions_max": 5,
+    "cargo_fare_per_unit": [50, 150],
+    "passenger_fare_each": [200, 600],
+    "far_destination_bonus": 1.3,
+    "cargo_types": ["iron ore", "wine", "textiles", "computer parts", "colony supplies", "machine parts"]
+  }
+}
