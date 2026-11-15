@@ -82,6 +82,11 @@ class GameState:
         self._reverse_start: float = 0.0
         self._boundary_reached_this_frame: bool = False
 
+        # Jump plumbing (Stage 7 forward hook; the jump animation itself is
+        # built in Stage 8). Kept here as a plain flag so the system map can be
+        # blocked while a jump animates without the pure model owning gameplay.
+        self._jumping: bool = False
+
     # ------------------------------------------------------------------
     # Read-only accessors
     # ------------------------------------------------------------------
@@ -253,3 +258,19 @@ class GameState:
 
     def boundary_reached_this_frame(self) -> bool:
         return self._boundary_reached_this_frame
+
+    # ------------------------------------------------------------------
+    # Jump plumbing (Stage 8 owns the animation; this just tracks state)
+    # ------------------------------------------------------------------
+    @property
+    def is_jumping(self) -> bool:
+        """True while a jump animation is in progress."""
+        return self._jumping
+
+    def begin_jump(self) -> None:
+        """Mark the start of a jump (all input ignored until :meth:`end_jump`)."""
+        self._jumping = True
+
+    def end_jump(self) -> None:
+        """Finish a jump animation and re-enable normal controls."""
+        self._jumping = False

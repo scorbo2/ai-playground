@@ -273,3 +273,179 @@ assertions here. Screenshot added to demonstrate problem: `stage6_screenshot.png
   as 25% coverage. `tests/test_game_flow.py::test_tactical_text_is_readable_glyphs_not_solid_blocks`
   therefore does a coarse pass to find the banner's bounding box and then scans
   that box pixel-by-pixel; with the bug it reports 100%, without it 3%.
+
+## Stage 7 — System graph + map view + fog of war
+
+An interrupted first revision of Stage 7 was reviewed rather than discarded: the
+graph generator and the selection/fog rules were sound, so they were kept and
+finished. Everything below marked **(fixed)** was broken in that revision and is
+now covered by a test. The stage gate grew from 155 to 231 tests
+(`tests/test_stage7.py`, 72 tests, plus 5 `map`-section config tests).
+
+- **The `map` config section is `{system_count, connections_min, connections_max,
+  alpha_connections}`**, added to the schema (`_MapConfig`), to `base_config()`
+  (hence to the `config-factory` fixture) and to all three shipped files in the
+  same change. The first revision added the JSON keys *without* the schema: with
+  `extra="forbid"` the shipped configs stopped validating and the fixture configs
+  lacked the section, so 19 tests failed and `GameScene.__init__` died on
+  `KeyError: 'map'` — i.e. the game did not start at all. This is the dev plan's
+  "unrecognized config keys are fatal" trap, sprung exactly as warned.
+- **Cross-field validation for `map` lives in the config schema, and the generator
+  still validates its own output.** Impossible ranges (`connections_min` >
+  `connections_max`, `system_count: 27`) are rejected at startup with the key
+  named, because a config the loader accepts but the generator cannot build would
+  otherwise fail mid-session at "New game". `GraphConstraints.check()` duplicates
+  a little of that on purpose: the generator must be usable without the loader
+  (tests, tooling, a future save-game path).
+- **The 26 system names stay in code** (`NATO_SYSTEMS`), per the spec's rule that
+  enum-like IDs do not belong in config. Only their *count* and their connections
+  are configurable. **(fixed)** The roster contained "Kiwi" — that is not a NATO
+  word; it is "Kilo". "Juliett" (two t's) and "Xray" (one word) are kept because
+  they are the NATO spellings, and that looks like a typo, so it is written down.
+- **Topology invariants are checked against a `GraphConstraints` value object, not
+  hard-coded constants.** **(fixed)** `SystemGraph.validate()` previously asserted
+  "26 systems, degree 1..3, Alpha→Bravo/Charlie/Delta" as literals while the
+  generator accepted `system_count`/`connections_*` from config, so the knobs were
+  decorative and any change to them crashed the game (`ValueError: Alpha must
+  connect to Bravo, Charlie and Delta` for `connections_max: 2`). Now the
+  generator and the checker are held to the same object, and the property tests
+  assert against the constraints they generated with.
+- **`connections_min` is enforced by a third generation phase** that gives every
+  under-connected system an extra lane, and raises `GraphGenerationError` when the
+  request is unsatisfiable (e.g. `min=max=3` over 5 systems: an odd degree sum
+  cannot exist). The first revision stored `connections_min` and never used it.
+  Consequence worth knowing: with the shipped `connections_min: 1`, a 26-system
+  world has exactly 25 edges — a **spanning tree with no route redundancy**, so
+  there is exactly one route back to Alpha. That satisfies the spec's "degree ∈
+  [1,3]" and is left as the shipped default; raising the min to 2 in config is the
+  knob for a world with alternative routes (and is tested).
+- **Every RNG draw in the generator comes from a list in `NATO_SYSTEMS` order,
+  never from set or dict iteration order.** **(fixed — this is the nastiest bug in
+  the revision)** Phase 2 picked an attachment source out of a `set`, and Python
+  randomises string hashing per process, so the *same seed produced a different
+  world in every run* (three runs of seed 42, three different graphs). Invisible
+  inside one pytest process; fatal for replaying a saved world. Regression test:
+  `test_generate_withTheSameSeedAcrossHashSeeds_shouldProduceIdenticalAdjacency`
+  generates the graph in three child processes with different `PYTHONHASHSEED`
+  values and compares digests.
+- **The world (graph *and* layout) is owned by `GameScene`/`SystemMapState`, not by
+  the map screen.** `SystemMapState` holds the immutable `SystemGraph`, the
+  immutable `MapLayout`, and the mutable fog/selection state, and exposes
+  `visible_nodes()` / `visible_edges()`. The view draws exactly what it is told.
+  *Rejected alternative:* let `MapView` compute its own node ring and re-derive
+  visibility in a nested loop over all 26 systems — that is what the first
+  revision did, and it both re-laid-out the world on every modal open (spec:
+  "layout computed once per game and cached") and drew all 26 node circles
+  regardless of reveal state, so the entire map was visible on turn one. The test
+  `test_openingAndClosingTheMap_shouldNeverRegenerateTheWorld` counts
+  `build_map_layout` calls; `test_draw_withUnrevealedSystems_shouldNotPaintTheirCircles`
+  counts pixels.
+- **`MapLayout` carries the geometry the renderer *and* the click test use**
+  (positions, label anchors, measured label sizes, derived label boxes, hit
+  radius). One rectangle per label, agreed on by both sides, so a label you can
+  see is a label you can click.
+- **Placement is one evenly-spaced ring, ordered by depth-first preorder from
+  Alpha.** A degree-≤3 tree placed this way puts each subtree in one contiguous
+  arc, so edges drawn as chords never cross — measured at **0 crossing pairs per
+  world across 40 seeds**, versus ~59 with the alphabetical ordering the first
+  revision used. The placement math is unchanged from `circular_positions`, so it
+  stays trivially testable.
+- **Labels sit radially outside their node, each at its own offset, and the offset
+  is solved per angle.** "Half the label height plus a gap" is the intuitive rule
+  and it is wrong everywhere except 12 and 6 o'clock: a 64×14 label at the 3
+  o'clock slot reaches 32 px back towards its own node, so a 24 px circle 18 px
+  away is *inside* the label's bounding box. `label_offset_for_angle()` bisects on
+  the true point-to-box distance.
+- **The label font size is the largest that verifiably fits, and the bound is
+  worst-case over *any* ring ordering.** Two guards, both needed:
+  `overlapping_pairs()` on the layout that was built (necessary) and
+  `_labels_clear_adjacent_slots()` requiring the two widest names to fit side by
+  side at the tightest point of the ring (sufficient for every world). Without
+  the second guard, verifying only the built layout accepted 20 pt for some seeds
+  and 14 pt for others — the map's typography would have drifted from world to
+  world.
+- **Overlap checks use the geometry things are actually drawn with**: label/label
+  is box-vs-box, node/node is circle-vs-circle, label/node is circle-vs-box. A
+  bounding-square test for the circles demands clearance no 1024×768 window can
+  afford (it pushes the label ring off screen), and it also produced 3200 false
+  positives while being written.
+- **`HEADER_BAND` (72 px) is part of the layout contract**, so the modal's own
+  copy (banner, `Current: X  Destination: Y`, hint line) can never collide with a
+  system label: `fits_on_screen()` treats the band as a hard edge. Without it the
+  ring's topmost label lands at y≈16, straight through the header text.
+- **`MapLayoutError` is raised when no font size fits** (e.g. a 120×120 window).
+  A silently cramped map is worse than a named failure.
+- **Hit testing lives in the layout** (`MapLayout.node_at`): a click counts if it
+  lands in a node's hit circle *or* in that node's label box, and only
+  *revealed* systems are candidates — so fog of war is enforced at the pick level,
+  not only in the renderer. The hit radius is 45% of the node-to-node gap, so two
+  nodes can never both claim one click.
+- **Toggle-off is tested before selectability in `handle_map_click`.** **(fixed)**
+  An already-selected system is still a perfectly legal selection target, so
+  `can_select` first re-selected it forever and the spec's toggle-off was
+  unreachable code. Every rule passed in isolation; only a two-click test sees it.
+- **`SystemMapState` refuses a `MapLayout` from a different world** by comparing
+  the layout's placement order with a recomputed preorder of its graph. Two
+  worlds contain the same 26 names, so a name-set comparison passes while the
+  coordinates belong to another topology — every click would select the wrong
+  system with nothing visibly wrong.
+- **A full-window scene repaints the whole window.** `MapView.draw()` fills the
+  surface before drawing (same rule as `TitleScene` in the manual-fixes section).
+  **(fixed)** The first revision never cleared, so the tactical view, HUD and
+  minimap showed straight through the "modal". Regression test paints the canvas
+  magenta and asserts zero magenta pixels survive (exact aligned scan, because the
+  stride-2 sampling gotcha in the manual-fixes section makes coverage counts lie).
+- **Each label gets a background-coloured halo before its glyphs are blitted.**
+  With the shipped tree graph, DFS placement keeps every edge out of every label
+  box (measured: 0 intersections across 25 worlds), but a config that raises
+  `connections_min` adds cycle edges that would cut a strikethrough through a
+  name. One rect is cheaper than auditing every future edge for it.
+- **The current system is drawn green and the map prints a header line.** The spec
+  asks for "white circles + labels + thin grey edges"; a map with no "you are here"
+  marker and no destination readout is unusable, so the additions are recorded
+  here rather than smuggled in. Selection still uses the spec's `[ ]` brackets
+  (rendered as real glyph brackets hugging the label box, not hand-placed rects).
+- **`J` is not Stage 7's business.** The map sets a destination and the HUD nav
+  line reflects it (`No destination` → `Hyperspace / Bravo`, the Stage 6 seam), but
+  `J` still does nothing until Stage 8 builds the jump animation. The header hint
+  mentions J; a player who presses it gets nothing, which is expected for this
+  stage.
+- **Two jump flags, deliberately separate.** `GameState.is_jumping`
+  (`begin_jump`/`end_jump`) is model state the map gate consults;
+  `InputLayer.locked` suppresses controls. The map gate needs a *queryable* state
+  that survives an input drain, and Stage 8 owns setting both. Recorded because
+  they look duplicative.
+- **The simulation is paused while the map is open** — `SceneManager` routes
+  `update()` to the top scene only (Stage 6 review fix 1). That is the modal
+  semantic the stack exists for; `test_simulationStaysFrozenWhileTheMapIsOpen`
+  pins it so a future "update every scene" change cannot quietly make the map a
+  real-time overlay.
+- **`MapView(state)` takes only the map state; the manager arrives via
+  `on_enter`.** **(fixed)** The first revision's signature was
+  `MapView(manager, state)` but `GameScene` passed *itself*, and `on_enter` then
+  overwrote the attribute — so `self._manager.pop()`, `.quit()` and `.audio` were
+  being called on a `GameScene` that has none of them, and only the accidental
+  overwrite kept it working. Related cleanups: `GameScene` no longer reaches into
+  `manager._stack` (only the top scene is updated, so a "map already open" guard
+  is dead code), the bogus "avoid a circular import" local re-import is gone, and
+  `TacticalView.update()` / `GameScene.update()` now return typed actions.
+- **`GameScene.draw()` syncs `hud.nav_selected_name` from the map state** rather
+  than doing it in `update()`: `update()` does not run while a modal is on top,
+  but `draw()` always does, so a destination chosen on the map would otherwise
+  only appear on the HUD after closing it. Mutating in `draw()` is a small smell;
+  the alternative (the HUD reaching into the map state) is worse coupling.
+- **`tests/test_zz.py` was deleted**: a leftover Stage 6 debug probe
+  (`test_debug_colors`, printing sampled colours), not a Stage 7 test.
+- **connections_min** ships with default **2**, not 1. The spec calls for
+  each node to have a minimum of 1 connection, but this can lead to more
+  tedious exploration (have to traverse back to Alpha to explore another branch).
+  Shipping with default of 2 in all three configs makes inter-system jumping easier.
+- **Gotchas for the next stage.** (1) The graph is seeded from a *separate*
+  `random.Random(config["rng"]["seed"])` — a world seed — while `GameState.rng` is
+  still unseeded; `rng.seed` does not yet reproduce a whole playthrough, only the
+  world. Stage 9/10 RNG work should decide whether to thread one generator
+  through. (2) Layout geometry is baked for the non-resizable 1024×768 window; if
+  resizing ever lands, the layout must be rebuilt on resize. (3) With `min=1` the
+  ring's DFS ordering still draws a few long "spoke" edges across the middle of
+  the map: correct, uncrossed, but visually busy — a radial/tree layout is the
+  upgrade path if that ever bothers a human.

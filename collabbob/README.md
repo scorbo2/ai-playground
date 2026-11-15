@@ -51,16 +51,23 @@ timestep. There is no fullscreen option.
 
 ## Controls
 
-- `M` — bring up the System Map (modal screen). Press `ESC` to return to the
-  tactical view; confirm the "Exit game?" modal with `ESC` again to quit.
+- `M` — toggle the System Map (full-screen modal). Click a system to set it as
+  your destination, click it again to clear the selection. `ESC` (or `M`) closes
+  the map and returns you to the tactical view; the simulation is paused while
+  the map is open.
 - `J` — jump to the currently selected system (requires a selection and
-  sufficient fuel).
+  sufficient fuel). *Not live until Stage 8.*
 - `L` — land at the current planet to open the spaceport interface.
+  *Not live until Stage 9; the on-screen "Press L to land here" prompt is.*
 - `T` — scan for ships in the current system (HUD "nearest ship" readout).
-- `ESC` — exit the game (confirmation dialog).
+  *Not live until Stage 11.*
+- `ESC` — close whatever modal is open (System Map, difficulty dialog).
+  *The "Exit game?" confirmation arrives in Stage 13; QUIT (closing the window)
+  already exits the game.*
 - Arrow keys — rotate the ship (hold to keep turning, release to stop).
   `Up` applies thrust (consumes fuel); `Down` reverses course once, then stops.
-- `Space` — fire the ship's projectile weapon.
+- `Space` — fire the ship's projectile weapon. *Binding registered; projectiles
+  arrive in Stage 11.*
 
 ## General usage
 
@@ -68,9 +75,17 @@ timestep. There is no fullscreen option.
   difficulty (this selects one of the `config_*.json` files).
 - Start a new game; the player begins in the Alpha system with
   `new_game.starting_credits` credits and an empty ship.
-- Press `M` to explore the System Map and gradually reveal the graph of all
-  26 solar systems (Alpha, Bravo, Charlie, Delta, ... Zulu). Systems can only
-  be jumped to when they are directly connected to the current system.
+- Press `M` for the System Map: white circles are systems, thin grey lines are
+  hyperspace lanes, the green circle is where you are now, and `[Name]` marks
+  your chosen destination. Only systems you have reached - plus everything
+  linked to them - are drawn at all; the rest of the graph stays in the fog of
+  war, permanently revealed once you arrive.
+- You can only select a system that is drawn **and** directly linked to the
+  system you are standing in; the current system itself is never selectable, and
+  clicking a selected system clears the selection. The HUD nav line reflects the
+  choice (`No destination` becomes `Hyperspace / Bravo`).
+- Jumping is Stage 8: `J` is registered but does nothing yet, so the destination
+  you pick on the map cannot be travelled to in this build.
 - Land with `L` at a planet to reach the spaceport, accept cargo/passenger
   missions and ship upgrades, then launch with the `Launch!` button.
 - Reach `economy.win_credits` (1,000,000 credits) to win the game.
@@ -85,6 +100,31 @@ printed to stderr. All three files must contain identical keys; the easy,
 medium, and hard files are tuned for easy, balanced, and difficult play
 (easy: generous economy and better starting ship stats with lighter fuel
 usage; hard: smaller fares, faster fuel burn, more expensive upgrades).
+
+The `map` section controls the shape of the world graph:
+
+```json
+"map": {
+  "system_count": 26,
+  "connections_min": 1,
+  "connections_max": 3,
+  "alpha_connections": ["Bravo", "Charlie", "Delta"]
+}
+```
+
+- `system_count` — how many of the NATO-named systems exist (2...26; the name
+  roster itself lives in code, `src/map_systems/graph.py::NATO_SYSTEMS`).
+- `connections_min` / `connections_max` — the degree bounds every system must
+  satisfy. With `connections_min: 1` the graph is a bare spanning tree, so only
+  one route leads back to Alpha; raising it to 2 forces extra lanes (and makes
+  route redundancy possible).
+- `alpha_connections` — the systems Alpha is linked to. These are its *only*
+  links, pinning its degree at exactly `len(alpha_connections)`.
+
+Impossible combinations (e.g. `connections_min` above `connections_max`, or
+`system_count: 27`) are rejected at startup rather than crashing the game when
+you start a new game. The RNG seed in `rng.seed` doubles as the world seed: set
+it to a number to get the same 26-system map every run.
 
 ## Tests
 

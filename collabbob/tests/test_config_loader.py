@@ -93,3 +93,63 @@ def test_config_unrecognized_key_raises_config_error(config_factory):
     with pytest.raises(ConfigLoadError) as excinfo:
         load_config(dir)
     assert "unexpected_key" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Stage 7: the `map` section
+# ---------------------------------------------------------------------------
+
+MAP_KEYS = {"system_count", "connections_min", "connections_max", "alpha_connections"}
+
+
+def test_shipped_configs_allCarryTheMapSectionTheGraphGeneratorNeeds():
+    """GIVEN the three shipped configs, WHEN validated, THEN each carries a full
+    ``map`` section pinning Alpha to Bravo/Charlie/Delta.
+
+    The dev plan requires config files and schema to change together; this is the
+    check that a Stage 7 key never ends up in only one of them.
+    """
+    for values in load_config().values():
+        assert "map" in values, "the map section is part of the schema now"
+        assert set(values["map"]) == MAP_KEYS
+        assert values["map"]["alpha_connections"] == ["Bravo", "Charlie", "Delta"]
+        assert values["map"]["connections_min"] <= values["map"]["connections_max"]
+
+
+def test_config_mapSectionMissing_shouldRaiseConfigError(config_factory):
+    """Dropping the whole map section is fatal, not a KeyError at New game."""
+    dir = config_factory()
+    easy_path = os.path.join(dir, "config_easy.json")
+    with open(easy_path, encoding="utf-8") as handle:
+        values = json.load(handle)
+    del values["map"]
+    with open(easy_path, "w", encoding="utf-8") as handle:
+        json.dump(values, handle)
+
+    with pytest.raises(ConfigLoadError) as excinfo:
+        load_config(dir)
+    assert "map" in str(excinfo.value)
+
+
+def test_config_unrecognizedMapKey_shouldRaiseConfigError(config_factory):
+    """Unknown keys are fatal everywhere, including inside `map`."""
+    dir = config_factory(overrides={"map.nonexistent_knob": 3})
+    with pytest.raises(ConfigLoadError) as excinfo:
+        load_config(dir)
+    assert "nonexistent_knob" in str(excinfo.value)
+
+
+def test_config_mapConnectionRangeImpossible_shouldRaiseConfigError(config_factory):
+    """connections_min above connections_max is rejected at load, with a readable reason."""
+    dir = config_factory(overrides={"map.connections_min": 4, "map.connections_max": 3})
+    with pytest.raises(ConfigLoadError) as excinfo:
+        load_config(dir)
+    assert "connections_min" in str(excinfo.value)
+
+
+def test_config_mapSystemCountBeyondTheNatoRoster_shouldRaiseConfigError(config_factory):
+    """The system roster is fixed in code, so system_count has a hard ceiling."""
+    dir = config_factory(overrides={"map.system_count": 27})
+    with pytest.raises(ConfigLoadError) as excinfo:
+        load_config(dir)
+    assert "system_count" in str(excinfo.value)

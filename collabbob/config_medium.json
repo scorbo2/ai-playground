@@ -1,5 +1,7 @@
 {
-  "rng": { "seed": null },
+  "rng": {
+    "seed": null
+  },
   "new_game": {
     "starting_credits": 20000
   },
@@ -62,9 +64,32 @@
     "upgrade_offers_max": 5,
     "missions_min": 4,
     "missions_max": 8,
-    "cargo_fare_per_unit": [150, 400],
-    "passenger_fare_each": [800, 2000],
+    "cargo_fare_per_unit": [
+      150,
+      400
+    ],
+    "passenger_fare_each": [
+      800,
+      2000
+    ],
     "far_destination_bonus": 1.5,
-    "cargo_types": ["iron ore", "wine", "textiles", "computer parts", "colony supplies", "machine parts"]
+    "cargo_types": [
+      "iron ore",
+      "wine",
+      "textiles",
+      "computer parts",
+      "colony supplies",
+      "machine parts"
+    ]
+  },
+  "map": {
+    "system_count": 26,
+    "connections_min": 2,
+    "connections_max": 3,
+    "alpha_connections": [
+      "Bravo",
+      "Charlie",
+      "Delta"
+    ]
   }
 }

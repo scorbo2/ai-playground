@@ -11,7 +11,9 @@ import json
 import os
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+
+from src.map_systems.graph import NATO_SYSTEMS
 
 # Directory holding the main.py shim (the game root), resolved from this
 # module's location so the config files are always found relative to the
@@ -108,6 +110,49 @@ class _EconomyConfig(_ConfigModel):
     cargo_types: List[str]
 
 
+class _MapConfig(_ConfigModel):
+    """World-graph shape. Cross-field sanity checks live here, not in the game.
+
+    A config the loader accepts but the generator cannot build would otherwise
+    fail at "New game" time - after the window is open and the player has
+    invested in a difficulty choice. The generator still validates its own
+    output, but nonsense ranges are config errors and belong here.
+    """
+
+    system_count: int
+    connections_min: int
+    connections_max: int
+    alpha_connections: List[str]
+
+    @model_validator(mode="after")
+    def _check_connections_are_possible(self) -> "_MapConfig":
+        if self.system_count < 2:
+            raise ValueError("map.system_count must be at least 2")
+        if self.system_count > len(NATO_SYSTEMS):
+            raise ValueError(
+                f"map.system_count cannot exceed {len(NATO_SYSTEMS)}: the roster of "
+                "NATO system names is fixed in code"
+            )
+        if not 1 <= self.connections_min <= self.connections_max:
+            raise ValueError(
+                "map.connections_min must be >= 1 and <= map.connections_max"
+            )
+        if self.connections_max >= self.system_count:
+            raise ValueError(
+                "map.connections_max must be below map.system_count: a system "
+                "cannot connect to itself"
+            )
+        if not self.alpha_connections:
+            raise ValueError("map.alpha_connections must name at least one system")
+        if len(set(self.alpha_connections)) != len(self.alpha_connections):
+            raise ValueError("map.alpha_connections contains duplicates")
+        if len(self.alpha_connections) > self.connections_max:
+            raise ValueError(
+                "map.alpha_connections lists more systems than map.connections_max allows"
+            )
+        return self
+
+
 class _NewGameConfig(_ConfigModel):
     starting_credits: int
 
@@ -124,6 +169,7 @@ class ConfigRoot(_ConfigModel):
     tactical: _TacticalConfig
     combat: _CombatConfig
     economy: _EconomyConfig
+    map: _MapConfig
 
 
 def base_config() -> dict:
@@ -198,6 +244,12 @@ def base_config() -> dict:
                 "colony supplies",
                 "machine parts",
             ],
+        },
+        "map": {
+            "system_count": 26,
+            "connections_min": 1,
+            "connections_max": 3,
+            "alpha_connections": ["Bravo", "Charlie", "Delta"],
         },
     }
 

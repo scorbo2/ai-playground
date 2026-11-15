@@ -82,8 +82,13 @@ class TacticalView:
         """Route every pygame event into the input layer for later draining."""
         self.input.feed_event(event)
 
-    def update(self) -> None:
-        """Drain one frame: feed ship controls and advance the simulation."""
+    def update(self) -> "list[Action]":
+        """Drain one frame: feed ship controls and advance the simulation.
+
+        Returns the discrete actions produced this frame (empty when none fired)
+        so the owning scene can react to them - an ``open_map`` action raises the
+        system map. Callers that ignore actions may discard the result.
+        """
         control_frame, actions = self.input.drain_frame()
         if control_frame is not None:
             self.game_state.feed_input(
@@ -106,6 +111,8 @@ class TacticalView:
 
         for action in actions:
             self.on_action(action)
+
+        return actions
 
     def show_message(self, text: str, duration_frames: int = 180) -> None:
         """Overlay a transient message on the game view (Stages 8/11 use this)."""
