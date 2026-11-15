@@ -75,6 +75,17 @@ class _TacticalConfig(_ConfigModel):
     stars: _StarConfig
 
     @model_validator(mode="after")
+    def _check_launch_grace_period_exists(self) -> "_TacticalConfig":
+        """The post-spaceport immunity period must be a real frame count.
+
+        Stage 9 arms it on launch. A negative value behaves exactly like "no grace
+        period" while reading like one, so it is rejected rather than clamped.
+        """
+        if self.launch_immunity_frames < 0:
+            raise ValueError("tactical.launch_immunity_frames cannot be negative")
+        return self
+
+    @model_validator(mode="after")
     def _check_jump_is_sane(self) -> "_TacticalConfig":
         """Reject jump geometry that would spawn the player somewhere impossible.
 
@@ -141,6 +152,19 @@ class _PlayerShipConfig(_ConfigModel):
     length: int
     width: int
 
+    @model_validator(mode="after")
+    def _check_capacity_holds_a_job(self) -> "_PlayerShipConfig":
+        """The hull must be able to carry at least one contract.
+
+        Stage 9 caps every offer by the ship's own capacity, so a zero-capacity
+        ship does not merely play poorly, it produces an empty board forever.
+        """
+        if self.cargo_room < 1:
+            raise ValueError("player_ship.cargo_room must be at least 1")
+        if self.passenger_space < 1:
+            raise ValueError("player_ship.passenger_space must be at least 1")
+        return self
+
 
 class _UpgradeStepConfig(_ConfigModel):
     shields: int
@@ -150,6 +174,31 @@ class _UpgradeStepConfig(_ConfigModel):
     fuel: int
     cargo: int
     passenger: int
+
+    @model_validator(mode="after")
+    def _check_steps_are_upgrades(self) -> "_UpgradeStepConfig":
+        """Every purchased level must actually improve something.
+
+        A zero or negative step charges the player for a level that leaves the
+        ship unchanged (or worse). The seven stats are enumerated rather than
+        swept so a renamed key still fails the schema.
+        """
+        magnitudes = {
+            "shields": self.shields,
+            "armor": self.armor,
+            "engine_percent": self.engine_percent,
+            "weapon_damage": self.weapon_damage,
+            "fuel": self.fuel,
+            "cargo": self.cargo,
+            "passenger": self.passenger,
+        }
+        for name, value in magnitudes.items():
+            if value <= 0:
+                raise ValueError(
+                    f"upgrade_steps.{name} must be greater than 0: an upgrade may "
+                    f"not be a no-op or a downgrade (got {value})"
+                )
+        return self
 
 
 class _CombatConfig(_ConfigModel):
@@ -175,6 +224,66 @@ class _EconomyConfig(_ConfigModel):
     passenger_fare_each: List[float]
     far_destination_bonus: float
     cargo_types: List[str]
+
+    @model_validator(mode="after")
+    def _check_economy_is_usable(self) -> "_EconomyConfig":
+        """Reject an economy the spaceport code cannot run on, at startup.
+
+        Stage 9 is the first stage to *consume* these keys, so it is also the
+        first stage that would discover a nonsense value by crashing: a reversed
+        fare range dies inside ``random.uniform``, a ``missions_min`` above
+        ``missions_max`` dies inside ``random.randint``, and a negative far bonus
+        quietly prices long trips below short ones (the opposite of the spec).
+        All of them are data errors, so they are reported as config errors before
+        the window opens.
+        """
+        if self.win_credits <= 0:
+            raise ValueError("economy.win_credits must be greater than 0")
+        if not 0 <= self.missions_min <= self.missions_max:
+            raise ValueError(
+                "economy.missions_min must be >= 0 and <= economy.missions_max, "
+                f"got {self.missions_min}..{self.missions_max}"
+            )
+        if not 0 <= self.upgrade_offers_min <= self.upgrade_offers_max:
+            raise ValueError(
+                "economy.upgrade_offers_min must be >= 0 and <= "
+                f"economy.upgrade_offers_max, got "
+                f"{self.upgrade_offers_min}..{self.upgrade_offers_max}"
+            )
+        if self.upgrade_max_level < 1:
+            raise ValueError("economy.upgrade_max_level must be at least 1")
+        if self.upgrade_base_cost < 0:
+            raise ValueError("economy.upgrade_base_cost cannot be negative")
+        if self.upgrade_cost_multiplier < 1:
+            raise ValueError(
+                "economy.upgrade_cost_multiplier must be >= 1: the spec's cost curve "
+                "escalates, so a further level may not cost less than the last"
+            )
+        if self.fuel_cost_per_unit < 0 or self.repair_cost_per_point < 0:
+            raise ValueError(
+                "economy.fuel_cost_per_unit and economy.repair_cost_per_point "
+                "cannot be negative"
+            )
+        if self.far_destination_bonus < 0:
+            raise ValueError(
+                "economy.far_destination_bonus cannot be negative: long trips must "
+                "not pay less than short ones"
+            )
+        if not self.cargo_types:
+            raise ValueError("economy.cargo_types must name at least one cargo")
+        for key, pair in (
+            ("cargo_fare_per_unit", self.cargo_fare_per_unit),
+            ("passenger_fare_each", self.passenger_fare_each),
+        ):
+            if len(pair) != 2:
+                raise ValueError(f"economy.{key} must be [min, max], got {pair!r}")
+            low, high = pair
+            if low < 0 or low > high:
+                raise ValueError(
+                    f"economy.{key} must be a non-negative ascending range, got "
+                    f"[{low}, {high}]"
+                )
+        return self
 
 
 class _MapConfig(_ConfigModel):

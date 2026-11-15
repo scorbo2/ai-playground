@@ -161,6 +161,22 @@ class InputLayer:
         return Action(mapping.get(key, ""))
 
     # ------------------------------------------------------------------
+    def reset_held_state(self) -> None:
+        """Forget every key this layer believes is currently held down.
+
+        A modal that is opened *by* a key press never sees that key's release: the
+        press goes to the tactical layer, the modal is pushed during the same
+        frame, and the matching ``KEYUP`` arrives on the modal, which has no input
+        layer of its own to feed. The layer is then left holding a phantom key, so
+        the next press of that key produces no rising edge at all — the symptom is
+        "``L`` only works every other time", one frame after leaving the
+        spaceport. Any stage that pushes a modal on a keypress (Stage 13's game
+        over included) must follow it with this reset.
+        """
+        self._held.clear()
+        self._rising.clear()
+
+    # ------------------------------------------------------------------
     def lock_input(self) -> None:
         """Suppress all controls and actions (used while a jump animates)."""
         self.locked = True

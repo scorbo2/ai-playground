@@ -646,3 +646,245 @@ now covered by a test. The stage gate grew from 155 to 231 tests
   separate RNG, per the Stage 7 note). (4) `FlashOverlay.advance()` is only ticked
   while `GameScene` is the top scene; if Stage 13 lets a modal open during the
   white-out, the flash will hang mid-frame.
+
+## Stage 9 — Spaceport + economy (the vertical slice)
+
+- **The credit floor is *strictly above* zero: a purchase that would leave exactly
+  0 credits is refused.** `CREDIT_FLOOR = 0.0` and `can_afford` is
+  `credits - cost > CREDIT_FLOOR`. This is the same philosophy as Stage 8's
+  "J with exactly the fuel cost is refused" rule: the boundary is a refusal with a
+  message, not a cliff the player discovers by arriving with nothing. It also makes
+  the spec's gate ("no purchase path producing credits ≤ 0") a *one-line* proof
+  instead of an audit of six call sites, and it is asserted directly:
+  `test_everyPortPurchasePath_withTheShippedConfigs_shouldNeverTakeCreditsToZeroOrBelow`
+  drives accept/refuel/repair/upgrade against all three shipped configs.
+  *Rejected alternatives:* allow 0 and treat it as broke (then Stage 13 must decide
+  whether broke is a loss condition, which is Stage 13's call, not Stage 9's); a
+  configurable floor key (a knob nobody asked for, and the spec's game-over rule
+  already reads the balance).
+- **Offer payloads are capped by the player's own hull, not by a constant.**
+  `OFFER_CARGO_CEILING = 15` / `OFFER_PASSENGER_CEILING = 5` are ceilings, and the
+  generator takes `min(ceiling, stats.cargo_room)` and
+  `min(ceiling, stats.passenger_space)`. On hard the hull is 15 cargo / 4
+  passengers, so the old constant ceiling produced offers that could *never* be
+  accepted — an unclickable tease on a screen that is all about clicking. The
+  invariant "no offer is permanently dead" is swept over 200 seeds.
+- **One result type for everything a port sells: `PortTransaction(succeeded, reason,
+  credits_spent)`.** The first cut had `LoadResult` and `PurchaseResult`, identical
+  except for their names, and the spaceport promptly crashed with
+  `AttributeError: 'LoadResult' object has no attribute 'completed'` because a
+  handler guessed at the other type's field. Accepting a job, buying fuel, patching
+  armour and buying an upgrade are the same transaction shape: did it happen, why
+  not, and what did it cost. The view calls `_report(result)` for all four, so a new
+  service cannot forget to show its refusal.
+- **Fares are settled once and only once, by the model, on landing.** A `Mission`
+  carries `offer_id = (visit_serial, index)`. `visit_serial` comes from
+  `GameState.begin_port_visit()` — the model owns the numbering, so a board from a
+  previous visit can never collide with the current one, and "accept the same job
+  twice" (a money glitch the first cut allowed) is refused by identity rather than by
+  hoping the view disables the button. `land()` unloads only the loads bound for that
+  system, credits each fare exactly once, and returns a `LandingReport` — which is
+  also the copy source for the "Unloaded 3 cargo units and 1 passenger at Bravo:
+  +4,321 credits." message. Re-landing at the same system with the same job aboard
+  pays 0, and that is asserted twice (model level and in the playthrough).
+- **`land()` raises while a jump is in progress** rather than returning an empty
+  report. Landing mid-flight would settle fares the player has not arrived to
+  collect, and would be invisible; a `ValueError` at the seam is a bug the tests can
+  find. `GameScene` cannot reach it (the modal owns the keyboard, and `_open_spaceport`
+  refuses while jumping), which is exactly why an explicit guard is cheaper than a
+  comment saying "can't happen".
+- **`SystemGraph.jump_distance()` was added to the Stage 7 map layer.** The far bonus
+  needs the *lane length*, which is a property of the world graph and not of the
+  player's charts — a destination can be offered before it is revealed, so the fare
+  must not depend on fog of war. Putting a BFS in the economy would have duplicated
+  the graph's own adjacency rules; the method lives next to them and the economy
+  calls it. Symmetry, finiteness, and "never exceeds the world" are swept over 200
+  seeds, and a disconnected graph is a `ValueError` from the offer generator rather
+  than a silently unpriceable trip.
+- **Landed = immune, plus a grace window on launch.** `immune_to_damage` is
+  `is_landed or launch_immunity_frames_left > 0`, armed by `launch()`
+  (`tactical.launch_immunity_frames`, 120 frames = 2 s at 60 FPS). Two details worth
+  knowing: `launch()` is idempotent, so a second launch does **not** re-arm the clock
+  (otherwise parking and unparking indefinitely makes the ship invulnerable); and the
+  immunity clock ticks through a jump, because it is a wall-clock grace period, not a
+  "frames since you last stood still" counter. `advance_frame()` early-returns while
+  landed, so the sim underneath the modal cannot drift the ship out of the port it is
+  standing in.
+- **`ESC` launches.** The spec names only the "Launch!" button. The README has
+  promised since Stage 2 that `ESC` closes whatever modal is open, and a modal where
+  `ESC` does nothing reads as a swallowed keyboard. `SpaceportView.handle_event`
+  treats it as exactly equivalent to clicking Launch (same `launch()` order, same
+  confirm beep).
+- **(fixed) `InputLayer.reset_held_state()` exists because modals eat the `KEYUP`.**
+  The `L` press is delivered to the tactical layer, which pushes the modal in the same
+  frame; the release then arrives at the *modal*, which never forwards it. The input
+  layer kept believing `L` was held, so the next press produced no rising edge —
+  "the spaceport only opens every other time". `GameScene._release_finished_port_visit()`
+  calls `reset_held_state()` when the visit is dropped. **Any future modal that can
+  be opened by a bound gameplay key must do the same** (Stage 11's `T` scan and
+  Stage 13's pause will).
+- **`GameScene._open_spaceport()` refuses when a visit is already open.** In play the
+  scene stack already guarantees this; the guard is there because "the stack protects
+  me" is a property of the caller, and a re-routed key press would otherwise stack a
+  second modal and re-roll the board the player is reading.
+- **The spaceport screen is fixed geometry, and the capacities are computed from it.**
+  `contracts_capacity()` = 10 rows, `upgrades_capacity()` = 7 (one per stat, and
+  seven stats exist), `manifest_capacity()` = 4 lines. The services block is placed
+  below the *worst case* of the upgrade list rather than chasing however many rows
+  appeared this visit — the first layout did the latter, and the manifest promptly
+  painted over the message line (`MESSAGE_RECT` at y=654 vs a fifth manifest line
+  ending at 654). If a config ever raises `economy.missions_max` past the box, the
+  board truncates with an honest "...and N more this port cannot show" note instead
+  of rows running under the Launch button. One colour table (`PortPalette`), because
+  two hand-maintained dicts of the same colours is how a disabled border stops
+  matching a disabled caption.
+- **Buttons are created once per visit, then synced — never recreated.** Rebuilding
+  the board after every transaction moves widgets under the cursor mid-click.
+  `_sync_buttons()` re-reads the model instead: `offer_is_accepted` → "Aboard"
+  (disabled), level already bought → "Done" (disabled), `can_afford(offer.cost)` →
+  grey the price out, and the service captions carry their own live price
+  ("Refuel +12 units - 24 cr"). The affordability test is the model's own
+  `can_afford`, so a caption cannot promise something the refusal text then denies.
+- **Lore lives in `resources/lore.txt` (100 entries) and gets its own RNG stream.**
+  The world graph, the gameplay, and the lore each draw from a separate
+  `random.Random`, so adding a lore line cannot perturb ship placement — the Stage 7
+  note about not sharing streams, applied. Entries may carry a `(System)` tag
+  (substituted with the system's name; untagged entries are used verbatim); 100
+  entries over 26 systems means a fresh-looking book per run without repeats inside
+  one world. A missing or empty lore file is a **fatal startup error** (`SystemExit(1)`),
+  consistent with the project's config policy: a game that silently boots with no
+  spaceport flavour is a game with a broken feature nobody noticed.
+  `LoreBook.for_world()` resolves `LORE_FILE` at *call* time, which is what lets the
+  missing-file test monkeypatch the path at all.
+- **Upgrade offers sample only upgradable stats, and the wall is per-stat.**
+  `upgrade_max_level` (5) is enforced by the generator (a stat at the wall is never
+  offered) *and* by `purchase_upgrade` (which recomputes the price from the config
+  curve and refuses a stale level), so a screen holding an old board cannot be talked
+  into a second level at the old price. Cost stays `base * multiplier ** (level - 1)`
+  — exponential, exactly as Stage 7 decided; the table test pins level 1 = base price
+  and level 5 = `2500 * 3**4 = 202500` on hard. `upgrade_steps` on the model is keyed
+  by **stat name** (`weapons`), not by config key (`weapon_damage`); the mapping lives
+  in one function, `upgrade_step_for()`.
+- **No config keys were added by this stage — validation was.** All of the
+  `economy.*`, `new_game.starting_credits`, `tactical.launch_immunity_frames` and
+  upgrade-step keys this stage needs shipped in the Stage 7/8 config commits. What
+  was missing was *checks*: fare ranges must be ordered and positive, upgrade
+  multiplier ≥ 1.0 and max level ≥ 1, cargo/passenger room must be able to hold at
+  least one job (a hull of 0 makes every offer dead), and the launch grace period must
+  exist. Those live in `_EconomyConfig`, `_UpgradeStepConfig`, `_PlayerShipConfig` and
+  `_TacticalConfig`, and load failure is fatal — the project's standing rule.
+- **Deviation, worth flagging for Stage 14's sweep: the spec says "4–8 generated
+  offers"; the shipped configs say easy 6–10, medium 4–8, hard 3–5.** The ranges were
+  config data before this stage existed, and the difficulty-tuned spread is
+  defensible (hard gives fewer, smaller offers on a smaller hull); the medium table
+  matches the spec exactly. Recorded here rather than silently "fixed", because
+  changing committed config data is a balance decision, not an implementation one.
+  `missions_min`/`missions_max` are asserted to be respected over 200 seeds, so the
+  range is a tested property either way.
+- **Refuel and repair are "fill to full" buttons, not quantity pickers.**
+  `buy_fuel(units=None)` and `repair_armor(points=None)` take an optional quantity
+  (and are tested at partial quantities), but the screen offers one button whose
+  caption is the live price of the whole fill. A slider was not going to fit the row
+  grid, and the interesting part of the decision is the price, which the caption
+  states. A full tank / intact hull renders "Full" / "Intact" and disables the button,
+  so the screen never shows a 0-credit purchase.
+- **Test determinism gotcha, learned the hard way: `base_config()` ships
+  `rng.seed: null`.** Every scene-level Stage 9 helper therefore built an *unseeded*
+  game — different world, different contract board, different first Accept button on
+  every run. One test failed roughly one run in three because the job it happened to
+  click was a passenger run and the assertion was about cargo. `SCENE_SEED = 4242` +
+  `scene_config()` in `tests/test_stage9.py` fixes the seed for the whole file. If a
+  future stage writes scene tests against `base_config()` directly, they are flaky by
+  construction.
+- **Two real-loop gotchas, both already paid for once.** (1) A `KEYDOWN` and its
+  `KEYUP` posted in the same batch read as "key never pressed" — the press and the
+  release must be pumped in *separate* frames (Stage 8's `_press` already knew this;
+  Stage 9's `_tap_key` re-learned it). (2) A 4-hop lane cannot be flown on one tank:
+  the playthrough must stop and refuel mid-lane, and it must decide to do so at
+  `fuel <= jump_fuel`, not `fuel < jump_fuel`, because Stage 8's exact-fuel rule
+  refuses a jump whose price exactly equals the tank.
+- **Not implemented here, by design, with owners named:** the confirm beep's *volume*
+  and the rest of the audio layer (Stage 12 — the spaceport already calls
+  `manager.audio.play_confirm()` on successful transactions only, and the tests count
+  them through a spy); the victory/game-over treatment of `economy.win_credits` and
+  the stranded-fuel rule (Stage 13 — `credits` is read-only and `add_credits()` is the
+  only way in, so Stage 13 has one seam to watch); NPC despawn on jump (Stage 10).
+- **Gotchas for the next stages.** (1) `PortVisit` is discarded on launch
+  (`GameScene._release_finished_port_visit`), so nothing may hold a `Mission` across
+  visits — accept by identity, not by remembering. (2) `LandingReport.delivered_anything`
+  and `LandingReport.credits_gained` are the counters Stage 13's run-stats screen
+  should read; do not re-derive them from `carried_loads`, which is already emptied.
+  (3) The spaceport's buttons live in `_accept_buttons`/`_buy_buttons` maps keyed by
+  widget — Stage 12's UI beep hook is `_report()`, which is the only place a
+  transaction outcome is announced. (4) The spaceport is a full-window repaint: if
+  Stage 11's `T` scan or Stage 13's pause draws *under* a modal, it will not be
+  visible, and if it draws *over* one, it will be a bug. (5) `can_afford` treats a
+  cost of 0 as always affordable — a free service is therefore safe to add, and a
+  negative price is a config bug the loader should catch before it gets here.
+
+## Stage 9 review fix — the market belongs to the system entry, not to the landing
+
+Reported in review, and correct: with offers rolled on *landing*, `L` → read the
+contracts → `ESC` → `L` re-dealt the whole board for two key presses and no cost.
+The port was a free slot machine, and nothing about the play pattern punished
+pulling the lever. (The earlier Stage 9 note — "leaving the port discards whatever
+was not bought" — described that behaviour as though it were a feature. It was a
+loophole with a docstring. Superseded below.)
+
+- **One market board per system *entry*.** `GameScene._enter_system(system)` deals
+  the board; it is called on a new game (Alpha) and on every jump
+  (`EVENT_ARRIVED`, which already existed and already had a comment inviting Stage
+  10's NPC roll to hang off it). `GameScene._open_spaceport()` no longer rolls
+  anything — it settles the arrival, raises the modal, and reuses
+  `self.port_visit`. `_release_finished_port_visit()` became `_close_port_modal()`:
+  it still resets the held-key state (the `KEYUP`-eaten-by-modal bug), but it no
+  longer throws the board away. Net effect: launch + re-land shows the same work;
+  jump out and back is a new visit and deals a new list.
+- **Why per-entry rather than per-run.** A run-scoped `dict[system → board]` would
+  also stop the "hop to Charlie and back" grind, but it makes every system's
+  market a permanent fixture of the run: revisit a system ten jumps later and the
+  jobs you ignored the first time are still sitting there. Per-entry keeps revisits
+  meaningful while still making the exploit cost a jump (fuel, time, whatever is
+  flying around out there). Explicitly the reviewer's call, recorded here so the
+  difference is not "rediscovered" in Stage 14.
+- **A derived RNG stream per market, not a shared cursor.**
+  `src/model/economy.py::port_rng(run_seed, system, visit_serial)` returns
+  `random.Random(f"{run_seed}:{system}:{visit_serial}")`. The market no longer
+  draws from `game_state.rng`. Two properties bought at once: the board cannot
+  shift because the player burned fuel for ten thousand frames first (a shared
+  cursor makes the market a function of play history — and the Stage 7 note about
+  not threading one RNG through the whole game applies), and two entries into the
+  same system get different boards because their serials differ. `GameScene`'s
+  `_market_seed(config)` is `rng.seed` when configured, else a random per-run
+  nonce: with a seed, a run's whole sequence of markets is reproducible, which is
+  what Stage 14's determinism sweep wants. Streams are now four: graph, gameplay,
+  lore, markets.
+- **The model needed no change at all, which is the one pleasant part.**
+  `begin_port_visit()` is unchanged (a monotonic per-run serial, now bumped per
+  entry instead of per landing), and `_accepted_offers` was already a run-scoped set
+  that nothing ever clears — so on a cached board, a job that was taken *or already
+  delivered* stays greyed out ("Aboard") forever. Without that, this change would
+  have introduced a new exploit in place of the old one: same board, same offer
+  ids, fare collectable twice. Worth stating out loud because it is now a
+  load-bearing invariant rather than a tidy extra: **the accepted-offer set is
+  never pruned.** `test_update_takingAJobThenRelaunchingAndLanding_shouldStillShowItAboardNotAvailable`
+  and the playthrough's second landing pin it.
+- **Side effects, intended:** the board is sized and priced by the hull the player
+  had on entry, so "buy the cargo upgrade here, re-land, farm bigger jobs at this
+  port" is closed too; a jump arrival spends a market RNG draw even if the player
+  never lands (accepted in review, and it is one draw); and `GameScene.port_visit`
+  is now non-null for the whole run, so anything reading it must ask *which system*
+  rather than *whether a port is open* — the modal state moved to
+  `_port_modal_open`. Stage 10, if you want "the system's ships" to follow the same
+  rule, the hook is the same line.
+- **What the tests now pin (`tests/test_stage9.py`):** the same object identity and
+  the same market descriptor after launch + re-land; the accepted job still aboard
+  and its button still greyed on the re-opened modal; a *different* market after
+  jumping Alpha → Bravo → Alpha, with the per-system entry serials asserted (1, 2,
+  3); `port_rng` determinism (same seed/system/entry, different system or entry);
+  and a 10,000-frame flight producing a byte-identical Alpha market to a fresh
+  scene. `market_descriptor()` exists because asserting on `offer_id` equality
+  would prove nothing — the id carries the serial, so two visits never share one.
+  `_SpyAudio` grew `play_jump_spinup`/`play_thunderclap`: a scene-level test that
+  flies a jump must not trip over the Stage 8 audio calls it never meant to
+  exercise.

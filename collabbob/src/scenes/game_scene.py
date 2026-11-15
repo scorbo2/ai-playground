@@ -14,8 +14,10 @@ simulation runs somewhere else. And it owns the world: the system graph and its
 screen layout are generated **once** here, from config, and cached for the rest
 of the run — the map modal is a window onto that state, never a source of it.
 
-Modals that take over input (system map, spaceport, game over) are pushed on top
-of this scene by their own stages.
+Modals that take over input are pushed onto this scene: the system map and the
+spaceport are raised here (``M`` and ``L``), and the game-over screen arrives in
+Stage 13. Only the top scene receives events, which is what pauses the
+simulation underneath a modal.
 """
 
 from __future__ import annotations
@@ -34,7 +36,8 @@ from src.map_systems.graph import GraphGenerationError, SystemGraphGenerator
 from src.map_systems.layout import build_map_layout
 from src.map_systems.system_map import SystemMapState
 from src.main_loop import SCREEN_SIZE
-from src.model.game_state import GameState
+from src.model.economy import PortVisit, generate_port_offers, port_rng
+from src.model.game_state import PLANET_WORLD_POSITION, GameState
 from src.model.jump import (
     BLOCKED_EXACT_FUEL,
     EVENT_ARRIVED,
@@ -43,8 +46,10 @@ from src.model.jump import (
     JumpController,
     JumpParams,
 )
+from src.model.lore import LoreBook
 from src.scene_manager import Scene
 from src.scenes.map_view import MapView
+from src.scenes.spaceport_view import SpaceportView
 from src.scenes.tactical_view import TacticalView
 
 if TYPE_CHECKING:
@@ -71,6 +76,20 @@ def _gameplay_rng(config: dict) -> "_random_lib.Random | None":
     return None if seed is None else _random_lib.Random(seed)
 
 
+def _market_seed(config: dict) -> int:
+    """The base for every per-system market stream (see :func:`port_rng`).
+
+    With ``rng.seed`` set, every market board in the run is reproducible from that
+    seed plus the order of entries. With it unset - how the game ships - a random
+    per-run nonce is drawn, which still gives the property that matters here: the
+    market a player sees when they enter a system does not change under them.
+    """
+    seed = config.get("rng", {}).get("seed")
+    if seed is None:
+        return _random_lib.randrange(1, 2**63)
+    return int(seed)
+
+
 class GameScene(Scene):
     """Owns the tactical view, the HUD and the world graph for one game."""
 
@@ -87,6 +106,19 @@ class GameScene(Scene):
         self.tactical = TacticalView(manager, self.game_state)
         self.hud = HudView(manager, self.game_state)
         self.system_map = self._build_system_map(config)
+        # Lore is world state too: one line per system, drawn once here so the
+        # spaceport never re-rolls a system's history between visits.
+        self.lore = self._build_lore_book(config, self.system_map.graph)
+        # The job market of the system the player currently occupies. Owned here
+        # (not in the modal) because entering a system is a world event: the board
+        # is dealt on entry and survives launches, so "launch, then land again"
+        # cannot re-roll the work on offer. It is replaced only when the player
+        # enters a system again (see :meth:`_enter_system`).
+        self.market_seed = _market_seed(config)
+        self.port_visit: PortVisit = self._enter_system(self.system_map.current_system)
+        # Whether the spaceport modal is currently on the stack. Deliberately
+        # separate from ``port_visit``, which now outlives the modal.
+        self._port_modal_open = False
         # The jump sequence is owned here because it is the only thing that
         # needs the ship *and* the world at the same time.
         self.jumps = JumpController(
@@ -138,6 +170,24 @@ class GameScene(Scene):
             raise SystemExit(1) from exc
         return SystemMapState(graph=graph, layout=layout)
 
+    def _build_lore_book(self, config: dict, graph) -> LoreBook:
+        """Assign one lore line per system, once, from ``resources/lore.txt``.
+
+        A third independent RNG stream (world graph, gameplay, lore): the map must
+        not shift because a different system was visited first, and the lore must
+        not shift because the player burned fuel for ten thousand frames. A
+        missing, unreadable, or empty pool file is fatal per the spec, reported the
+        way a bad config is reported rather than as a traceback or, worse, a spaceport
+        with nothing to say.
+        """
+        try:
+            return LoreBook.for_world(
+                graph.names, _random_lib.Random(config.get("rng", {}).get("seed"))
+            )
+        except (RuntimeError, OSError) as exc:
+            print(f"error: cannot load world lore: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
     # ------------------------------------------------------------------
     # Events / update
     # ------------------------------------------------------------------
@@ -159,9 +209,56 @@ class GameScene(Scene):
                 self._open_system_map()
             elif action.kind == "jump":
                 self._request_jump()
+            elif action.kind == "land":
+                self._open_spaceport()
+        self._close_port_modal()
         self._advance_jump()
         self._sync_jump_presentation()
         return tuple(actions)
+
+    def _enter_system(self, system: str) -> PortVisit:
+        """Deal the job market of a system the player has just entered.
+
+        One board per *entry*, not per landing. Rolling on landing made the port a
+        free slot machine: ``L``, glance at the contracts, ``ESC``, ``L`` - two key
+        presses and everything is re-dealt, so the best board was always one abort
+        away and no play pattern punished that. The work on offer now belongs to
+        the visit: launch and land again in the same system and the same contracts
+        are still there, minus anything already taken, while jumping out and back
+        is a new visit and does deal a new board.
+
+        The board is also priced against the hull the player had *on entry*, which
+        closes the other free lunch: "buy the cargo upgrade here, land again, farm
+        bigger jobs at the same port".
+        """
+        serial = self.game_state.begin_port_visit()
+        self.port_visit = generate_port_offers(
+            rules=self.game_state.economy,
+            graph=self.system_map.graph,
+            current_system=system,
+            stats=self.game_state.stats,
+            upgrade_levels=self.game_state.upgrade_levels,
+            rng=port_rng(self.market_seed, system, serial),
+            visit_serial=serial,
+        )
+        return self.port_visit
+
+    def _close_port_modal(self) -> None:
+        """Notice that the player launched: the modal is gone, the market is not.
+
+        The model's ``is_landed`` flag is the signal rather than a callback from the
+        modal: the spaceport can be left by a button, by ``ESC``, or by a window
+        quit, and every one of those paths already clears the flag. The market board
+        deliberately survives the launch - it is replaced by :meth:`_enter_system`,
+        not by leaving a planet.
+        """
+        if not self._port_modal_open or self.game_state.is_landed:
+            return
+        self._port_modal_open = False
+        # The press that opened the port left its release at the door: the modal
+        # swallowed the KEYUP, so the tactical layer would otherwise still believe
+        # ``L`` is being held and refuse the next press.
+        self.tactical.input.reset_held_state()
 
     def _sync_jump_presentation(self) -> None:
         """Hand the current jump phase to the view and the HUD.
@@ -226,6 +323,10 @@ class GameScene(Scene):
             # Stage 10's NPC despawn hooks in here too: every ship in the system
             # the player just left is gone, and the new system rolls its own.
             self.tactical.notify_system_changed(event.system)
+            # Entering a system also deals its job market. The draw happens even if
+            # the player never lands: the market belongs to the system, not to the
+            # spaceport screen, and re-entering this system later deals a new one.
+            self._enter_system(event.system)
         elif event.kind == EVENT_JUMP_ENDED:
             self.tactical.input.unlock_input()
 
@@ -240,6 +341,13 @@ class GameScene(Scene):
         :meth:`_sync_jump_presentation`.
         """
         self.hud.nav_selected_name = self.system_map.selected_system
+        # The economy readouts sync at draw time for the same reason the nav line
+        # does: every credit the player spends or earns in a port happens while
+        # update() is frozen under the modal, so a draw-time sync is the only one
+        # that is guaranteed to have seen it.
+        self.hud.credits = self.game_state.credits
+        self.hud.cargo_used = self.game_state.cargo_used
+        self.hud.passengers_used = self.game_state.passengers_used
         self.tactical.draw(surface)
         self.hud.draw(surface)
         self.screen_flash.draw(surface)
@@ -256,3 +364,44 @@ class GameScene(Scene):
         if self.game_state.is_jumping:
             return
         self._manager.push(MapView(self.system_map))
+
+    # ------------------------------------------------------------------
+    # Landing (Stage 9)
+    # ------------------------------------------------------------------
+    def _open_spaceport(self) -> None:
+        """Handle ``L``: settle at the planet, roll the port, raise the modal.
+
+        Deliberately silent outside landing range, matching the Stage 8 rule for
+        ``J`` with nothing selected: the "Press L to land here" prompt is the
+        invitation, and a banner for pressing it unprompted is noise the spec
+        never asks for. The one message the spec does ask for — what just got
+        unloaded, and for how much — is the spaceport's opening line, because the
+        player is reading that screen when it happens.
+
+        The offers were dealt on entering the system (see :meth:`_enter_system`).
+        Landing only raises the screen that shows them, which is what stops a
+        player re-rolling a market by leaving the planet and landing again.
+        """
+        if self.game_state.is_jumping:
+            return
+        # A port already on screen means the modal owns the keyboard in play, but
+        # "the modal owns the keyboard" is a property of the scene stack, not of
+        # this method. Guarding here keeps a re-routed L from stacking a second
+        # modal on top of the first (and re-rolling a board the player is reading).
+        if self._port_modal_open:
+            return
+        if not self.game_state.in_landing_range(PLANET_WORLD_POSITION):
+            return
+
+        current = self.system_map.current_system
+        report = self.game_state.land(current)
+        if self.port_visit.system != current:
+            # Defensive: every entry deals a board, so this is unreachable in play.
+            # A scene built (or a system reached) without an arrival event still
+            # gets a market, and a board for the *wrong* system would be worse than
+            # none at all.
+            self._enter_system(current)
+        self._port_modal_open = True
+        self._manager.push(
+            SpaceportView(self.port_visit, self.game_state, report, self.lore)
+        )

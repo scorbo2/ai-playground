@@ -178,6 +178,32 @@ class SystemGraph:
                     queue.append(neighbour)
         return len(seen) == len(self.names)
 
+    def jump_distance(self, from_system: str, to_system: str) -> int | None:
+        """Fewest hops between two systems, by breadth-first search.
+
+        Used by the economy for the 'far bonus': the trip length is a property
+        of the world graph, not of the player's map knowledge (a destination
+        can be offered even before the player has discovered it). ``0`` for the
+        same system; ``None`` when they are not connected, which cannot happen
+        in a generated world (``is_connected()`` is validated on generation).
+        """
+        if from_system == to_system:
+            return 0
+        if from_system not in self.names or to_system not in self.names:
+            return None
+        queue: deque[tuple[str, int]] = deque([(from_system, 0)])
+        seen: set[str] = {from_system}
+        while queue:
+            current, hops = queue.popleft()
+            for neighbour in self.neighbours(current):
+                if neighbour in seen:
+                    continue
+                seen.add(neighbour)
+                if neighbour == to_system:
+                    return hops + 1
+                queue.append((neighbour, hops + 1))
+        return None
+
     def validate(self, constraints: GraphConstraints) -> None:
         """Assert every structural invariant holds; raise on violation.
 

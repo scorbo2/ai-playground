@@ -61,11 +61,19 @@ timestep. There is no fullscreen option.
   mid-jump, and `M` stays closed until you land. `J` does nothing if no system
   is selected, tells you "insufficient fuel" if you cannot pay, and refuses if
   you are inside landing range of the planet.
-- `L` — land at the current planet to open the spaceport interface.
-  *Not live until Stage 9; the on-screen "Press L to land here" prompt is.*
+- `L` — land at the current planet and open the spaceport (full-screen modal).
+  Legal only inside `tactical.landing_range` of the planet, and only while not
+  jumping; outside that range it does nothing, silently, exactly like `J` with no
+  destination selected. Landing settles any cargo bound for this system (see
+  "Trading" below), stops the ship, refills shields, and makes you immune while
+  you sit there. The simulation underneath is paused while the spaceport is open.
+- `Launch!` (or `ESC`, while the spaceport is open) — leave the planet. You get
+  `tactical.launch_immunity_frames` frames (2 seconds) of immunity on the way out,
+  so parking in a hostile system is survivable once.
 - `T` — scan for ships in the current system (HUD "nearest ship" readout).
   *Not live until Stage 11.*
-- `ESC` — close whatever modal is open (System Map, difficulty dialog).
+- `ESC` — close whatever modal is open (System Map, difficulty dialog). On the
+  spaceport it is the same as clicking `Launch!`.
   *The "Exit game?" confirmation arrives in Stage 13; QUIT (closing the window)
   already exits the game.*
 - Arrow keys — rotate the ship (hold to keep turning, release to stop).
@@ -100,8 +108,55 @@ timestep. There is no fullscreen option.
   `tactical.boundary_warnings.cooldown_frames` frames). The one exception is a
   jump: once you are burning, the boundary no longer applies.
 - Land with `L` at a planet to reach the spaceport, accept cargo/passenger
-  missions and ship upgrades, then launch with the `Launch!` button.
+  contracts and ship upgrades, top up fuel and armour, then leave with `Launch!`
+  or `ESC`.
 - Reach `economy.win_credits` (1,000,000 credits) to win the game.
+
+### Trading
+
+The economy is the loop the rest of the game exists to serve, so it is worth
+stating plainly:
+
+1. **Enter a system.** Entering one — starting a run in Alpha, or arriving by
+   jump — deals that system's market: `economy.missions_min`–`missions_max`
+   transport contracts and `economy.upgrade_offers_min`–`upgrade_offers_max` ship
+   upgrades. The market belongs to the *visit*, not to the spaceport screen: land,
+   launch, and land again in the same system and the same contracts are still on
+   the board (minus anything you have already taken). Jumping away and coming back
+   is a new visit, and that does deal a new list. Offers are sized for the hull you
+   had when you entered, so a cargo upgrade bought here pays off at the *next*
+   port. Re-drawing the screen never re-rolls anything, at any time.
+2. **Read the rows.** A contract says what it carries, where it goes, how many
+   jumps that is, the far bonus if any, and the fare. The destination is never
+   the system you are standing in. Fares are monotonic: on one board, more
+   payload is never cheaper, and a longer lane is never cheaper for the same
+   payload.
+3. **Accept.** Accepting occupies cargo holds and/or passenger berths for the
+   whole trip. A job never splits: if the hold cannot take all of it, the click is
+   refused and the message says how much room you actually have left. Accepted
+   jobs cannot be cancelled from this screen.
+4. **Spend the rest of your money** while you are here — a full tank, a full hull,
+   or an upgrade that permanently raises a stat.
+5. **Jump the lane** (`M` to select, `J` to burn). A long lane may need a
+   mid-lane fuel stop: land anywhere, buy fuel, launch, continue.
+6. **Land at the destination.** Anything bound for that system is unloaded
+   automatically and paid out once, and the spaceport opens with the message:
+   `Unloaded 3 cargo units and 1 passenger at Bravo: +4,321 credits.` Landing
+   again at the same system with the same job aboard pays nothing: a fare is
+   collected exactly once.
+
+Credits can never reach zero by buying something: a purchase that would leave
+exactly 0 credits is refused with a message, the same way a jump that would leave
+exactly 0 fuel is refused. The HUD shows the balance, cargo used, and passengers
+used at all times (the spaceport repeats them, since the HUD is covered there).
+
+### Ship upgrades
+
+Each stat is bought one level at a time, and the price of level *n* is
+`upgrade_base_cost * upgrade_cost_multiplier ** (n - 1)` — exponential, so level 5
+on hard costs 81 times what level 1 did. A stat at `upgrade_max_level` is simply
+never offered again, and the button reads `Done` once installed. Upgrades are
+permanent for the run (a new game resets them).
 
 ## Configuration
 
@@ -176,6 +231,98 @@ a band the game could not honour would otherwise misplace the player mid-jump:
 supposed to fly to the planet), and `spawn_distance[1]` must stay within half of
 `tactical.system_pixel_size` (you are not supposed to arrive outside the system
 you just paid to reach).
+
+### Economy: contracts, upgrades, and port services
+
+The `economy` block prices everything the spaceport sells:
+
+```json
+"economy": {
+  "missions_min": 4,
+  "missions_max": 8,
+  "cargo_types": ["iron ore", "wine", "textiles", "computer parts",
+                  "colony supplies", "machine parts"],
+  "cargo_fare_per_unit": [150, 400],
+  "passenger_fare_each": [800, 2000],
+  "far_destination_bonus": 1.5,
+  "upgrade_offers_min": 2,
+  "upgrade_offers_max": 5,
+  "upgrade_base_cost": 1000,
+  "upgrade_cost_multiplier": 2,
+  "upgrade_max_level": 5,
+  "fuel_cost_per_unit": 2,
+  "repair_cost_per_point": 4,
+  "win_credits": 1000000
+}
+```
+
+- `missions_min` / `missions_max` — how many contracts a port offers per visit.
+- `cargo_fare_per_unit` / `passenger_fare_each` — `[min, max]` ranges. **One**
+  cargo rate and **one** passenger rate are rolled per port visit and shared by
+  every contract on that board, so the offers are comparable against each other.
+  (Rolling a fresh rate per contract is how a board ends up pricing 7 units
+  cheaper than 4.)
+- `far_destination_bonus` — the fare multiplier for distance: a 1-jump trip pays
+  `1.0x`, and every extra hop adds this much. So `1.5` and a 3-jump lane pays
+  `1 + 2*1.5 = 4.0x`. The hop count is measured on the world graph, not on the
+  player's charts, so an unexplored destination still gets a fair fare.
+- `upgrade_*` — see "Ship upgrades" above. The magnitudes those upgrades buy are
+  separate: `upgrade_steps` (flat points for shields/armor/fuel/cargo/passengers,
+  `weapon_damage` points, and a percent for `engine_percent`, which lifts
+  acceleration, top speed, and turn rate together).
+- `fuel_cost_per_unit` / `repair_cost_per_point` — the port service rates. The
+  buttons fill the tank and the hull; a full tank or an intact hull shows `Full` /
+  `Intact` and cannot be clicked.
+- `win_credits` — the victory balance (enforced in Stage 13).
+
+`new_game.starting_credits` is the balance a new run begins with (30,000 easy,
+20,000 medium and hard), and `tactical.launch_immunity_frames` is the grace period
+after leaving a planet.
+
+Every one of these is validated at startup, in addition to the "unknown or
+missing key is fatal" rule: a fare range whose minimum exceeds its maximum, an
+upgrade multiplier below 1.0 (which would make upgrades cheaper as they get
+bigger), an `upgrade_max_level` under 1, a `cargo_room`/`passenger_space` too
+small to hold a single job (which would make every contract unacceptable), or a
+negative launch grace period all stop the game at launch with a message naming the
+key. Raising `economy.missions_max` above 10 is allowed and produces a truncated
+board with an honest "...and N more this port cannot show" note — the spaceport's
+row grid is a fixed 10 contracts, 7 upgrades, and 4 manifest lines.
+
+### Spaceport flavour (`resources/lore.txt`)
+
+Each system gets one lore line, shown under its name when you land. The pool is a
+plain text file, one entry per line, `#` for comments:
+
+```
+# A harbour master who has never raised his voice.
+The harbour master at (System) has never raised his voice, and has never had to.
+(System): the lane out here is patrolled by nobody, which is its own kind of law.
+```
+
+`(System)` is replaced with the system's name (the `{System}`/`{system}` spellings
+work too); an untagged line is used verbatim. Lines are wrapped, not clipped, so
+long ones stay readable. Entries are drawn from a **separate RNG stream** from the
+world graph and the gameplay simulation, so adding a lore line cannot move a ship
+or reroll a contract board. The file is loaded at new game, and a missing or empty
+`resources/lore.txt` is a startup error rather than a silently flavourless game.
+
+### Seeing the spaceport
+
+One screen, four states (`stage9_spaceport.png`): a fresh board; three contracts
+aboard (the manifest explains the hold); a capacity refusal, whose message names
+the room you actually have; and a player with 1 credit, where every upgrade price
+is greyed out because the model, not the caption, decides what is affordable.
+
+![The spaceport: contracts, upgrades, port services, manifest](stage9_spaceport.png)
+
+```bash
+python scripts/capture_spaceport.py --sheet stage9_spaceport.png  # one sheet
+python scripts/capture_spaceport.py spaceport_frames             # individual frames
+```
+
+Deterministic: one seed fixes the world, the contract board, and the upgrade
+offers, so a layout tweak can be diffed as pictures.
 
 ### Seeing the jump
 

@@ -25,11 +25,41 @@ import random as _random_lib
 from dataclasses import dataclass
 
 from src.model.stats import ShipStats, ship_stats_from_config
+from src.model.economy import (
+    CarriedLoad,
+    EconomyRules,
+    LandingReport,
+    Mission,
+    PortTransaction,
+    format_credits,
+    pluralise,
+)
+from src.model.ship_upgrades import (
+    UPGRADE_LABELS,
+    UPGRADE_TYPES,
+    UpgradeOffer,
+    apply_upgrade,
+    upgrade_cost,
+    upgrade_step_for,
+)
 
 # Every system's planet sits at the world origin; see the module docstring for
 # the coordinate convention. Shared with the tactical view so the view and the
 # jump rules cannot disagree about where the ground is.
 PLANET_WORLD_POSITION = (0.0, 0.0)
+
+# No purchase may take the balance to this value or below. The spec's Stage 9
+# gate is "no purchase path producing credits <= 0", so affordability is checked
+# against the *resulting* balance rather than the price: a purchase that would
+# leave the player with exactly 0 credits is refused even though they could
+# "afford" it. See DECISIONS.md — this also means a player at exactly 0 credits
+# can never be talked into a negative balance by any port service.
+CREDIT_FLOOR = 0.0
+
+# Tolerance for "the tank (or the hull) is already full" comparisons. Fuel and
+# armour are floats that have been subtracted from floats; a residual of 1e-9
+# should read as full, not as a purchasable sliver.
+_FULL_EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -73,6 +103,36 @@ class GameState:
             configs["tactical"]["system_pixel_size"]
         )
         self.landing_range: float = float(configs["tactical"]["landing_range"])
+        # Stage 9 economy surface. Every money tunable is hoisted into one
+        # frozen rules object so the port code never reaches into a config dict,
+        # and the per-stat upgrade magnitudes stay where the loader validated
+        # them (the view asks for them through :attr:`upgrade_steps`).
+        self.economy = EconomyRules.from_config(configs["economy"])
+        # Re-keyed by stat name (not by config key) so the port code and the
+        # purchase path both index the same mapping with the same name: "weapons"
+        # is a stat, "weapon_damage" is a config key, and mixing the two is how a
+        # KeyError reaches a spaceport screen at draw time.
+        self._upgrade_steps = {
+            stat: upgrade_step_for(configs["upgrade_steps"], stat)
+            for stat in UPGRADE_TYPES
+        }
+        self._credits: float = float(configs["new_game"]["starting_credits"])
+        self._carried: list[CarriedLoad] = []
+        self._accepted_offers: set[tuple[int, int]] = set()
+        self._upgrade_levels: dict[str, int] = {name: 0 for name in UPGRADE_TYPES}
+        # Port visits are numbered so that an offer can never be accepted twice,
+        # not even across two visits to the same system (see accept_mission).
+        self._port_visit_serial: int = 0
+
+        # Post-spaceport state: while landed the ship takes no damage and cannot
+        # be steered; on launch a grace period of immunity begins (the spec's
+        # "immune for N frames after leaving spaceport"), counted in frames so it
+        # ticks with the fixed timestep rather than with wall-clock time.
+        self.launch_immunity_frames: int = int(
+            configs["tactical"]["launch_immunity_frames"]
+        )
+        self._landed: bool = False
+        self._launch_immunity_frames: int = 0
 
         # World state (planet-centred coordinates).
         self._position: tuple[float, float] = (0.0, 0.0)
@@ -154,6 +214,385 @@ class GameState:
         self.reset_velocity()
         self.refill_shields()
 
+    # ------------------------------------------------------------------
+    # Stage 9: money, cargo, and spaceport state
+    # ------------------------------------------------------------------
+
+    @property
+    def credits(self) -> float:
+        """Credits held by the player.
+
+        Deliberately read-only. The first draft exposed a setter that clamped at
+        zero, which turned an unaffordable purchase into a silent one that left
+        the player with exactly nothing; every debit now goes through a method
+        that checks affordability *before* touching the balance, so a negative
+        balance is not clamped away — it is unreachable.
+        """
+        return self._credits
+
+    @property
+    def upgrade_levels(self) -> dict[str, int]:
+        """Per-stat upgrade levels (a copy: granting a free upgrade is not an option)."""
+        return dict(self._upgrade_levels)
+
+    @property
+    def upgrade_steps(self) -> dict[str, float]:
+        """The configured magnitude per upgrade **stat name** (``weapons``, not ``weapon_damage``)."""
+        return dict(self._upgrade_steps)
+
+    @property
+    def carried_loads(self) -> list[CarriedLoad]:
+        """The mission payloads currently aboard (a defensive copy)."""
+        return list(self._carried)
+
+    @property
+    def cargo_used(self) -> int:
+        """Total cargo units currently carried (HUD seam)."""
+        return sum(load.cargo_units for load in self._carried)
+
+    @property
+    def passengers_used(self) -> int:
+        """Total passenger slots currently in use (HUD seam)."""
+        return sum(load.passengers for load in self._carried)
+
+    def add_credits(self, amount: float) -> None:
+        """Credit the player (fares, bounties). Only ever an increase.
+
+        Debits are refused rather than clamped, so a negative ``amount`` here
+        would be a back door around :meth:`purchase_upgrade` and friends.
+        """
+        amount = float(amount)
+        if amount < 0:
+            raise ValueError(f"credits may only be added, not subtracted: {amount}")
+        self._credits += amount
+
+    # -- port visits ----------------------------------------------------
+
+    def begin_port_visit(self) -> int:
+        """Number the next port visit and return its serial.
+
+        Offer ids are ``(serial, index)``. Numbering them per visit is what makes
+        "accept this job" idempotent: an offer from a stale visit can never be
+        replayed for a second fare, even if the player returns to the same system
+        and the new visit happens to number its board the same way.
+        """
+        self._port_visit_serial += 1
+        return self._port_visit_serial
+
+    def accept_mission(self, mission: Mission) -> PortTransaction:
+        """Take a port's job aboard, if the ship has room and it is still available."""
+        if self.offer_is_accepted(mission.offer_id):
+            return PortTransaction(False, "That job has already been accepted.")
+        result = self.accept_load(
+            CarriedLoad(
+                destination=mission.destination,
+                fare=mission.fare,
+                cargo_type=mission.cargo_type,
+                cargo_units=mission.cargo_units,
+                passengers=mission.passengers,
+            )
+        )
+        if result.succeeded:
+            self._accepted_offers.add(mission.offer_id)
+        return result
+
+    def accept_load(self, load: CarriedLoad) -> PortTransaction:
+        """Take a payload aboard, if there is room.
+
+        Accepting costs capacity, nothing else. The fare is attached to the
+        payload and is only collected once the ship lands at the destination.
+        A load is never partly accepted: the spec's example (4 passengers with 2
+        slots free) is a refusal, not a split, because a half-delivered job pays
+        nothing and is indistinguishable from a wasted hold.
+        """
+        cargo_needed = self.cargo_used + load.cargo_units
+        passenger_needed = self.passengers_used + load.passengers
+        if cargo_needed > self.stats.cargo_room:
+            return PortTransaction(
+                succeeded=False,
+                reason=(
+                    f"Not enough cargo room: this job needs {load.cargo_units} "
+                    f"{pluralise(load.cargo_units, 'slot')}, and only "
+                    f"{self.stats.cargo_room - self.cargo_used} free."
+                ),
+            )
+        if passenger_needed > self.stats.passenger_space:
+            return PortTransaction(
+                succeeded=False,
+                reason=(
+                    f"Not enough passenger space: this job needs {load.passengers} "
+                    f"{pluralise(load.passengers, 'berth')}, and only "
+                    f"{self.stats.passenger_space - self.passengers_used} free."
+                ),
+            )
+        self._carried.append(load)
+        payload = []
+        if load.cargo_units:
+            payload.append(f"{load.cargo_units} cargo")
+        if load.passengers:
+            payload.append(f"{load.passengers} passenger(s)")
+        return PortTransaction(
+            succeeded=True,
+            reason=f"Loaded for {load.destination}: {', '.join(payload)}.",
+        )
+
+    def offer_is_accepted(self, offer_id: "tuple[int, int]") -> bool:
+        """Whether this port's job is already aboard (the spaceport greys it out).
+
+        Queried from the model rather than tracked by the view: a screen that
+        keeps its own copy of "what did I accept" will eventually disagree with
+        the hold, and the disagreement shows up as an accept button that pays
+        nothing.
+        """
+        return offer_id in self._accepted_offers
+
+    def upgrade_offer_is_available(self, offer: UpgradeOffer) -> bool:
+        """Whether an upgrade offer is still buyable at its listed level.
+
+        False once the offer has been bought (the stat has moved on past it) or
+        when the stat is maxed. The authority is the same level check
+        :meth:`purchase_upgrade` applies, so the greyed-out button and the
+        refused purchase can never disagree.
+        """
+        current = self._upgrade_levels.get(offer.stat)
+        if current is None:
+            raise ValueError(f"unknown upgrade stat: {offer.stat!r}")
+        return current < self.economy.upgrade_max_level and offer.level == current + 1
+
+    # -- landing and launching -------------------------------------------
+
+    @property
+    def is_landed(self) -> bool:
+        """True while the ship sits at a spaceport (the interface is open).
+
+        The owning scene clears this through :meth:`launch`; the scene that owns
+        the port visit watches it go False to drop the visit's offers, which is
+        why the flag lives in the model rather than in the view.
+        """
+        return self._landed
+
+    def land(self, system_name: str) -> LandingReport:
+        """Settle at a spaceport.
+
+        Unloads every payload destined for ``system_name`` (in full, as shipped),
+        credits their fares, resets velocity, and refills shields. Unloading
+        happens *before* the credits are applied and the loads are removed
+        outright, so a fare can never be collected twice: landing twice in the
+        same system (or landing elsewhere in between) nets the ship nothing from
+        those loads.
+
+        Position is deliberately untouched — the spec says the ship stays where
+        the player pressed ``L``.
+        """
+        if self._jumping:
+            # Unreachable through legal play (the jump controller refuses a jump
+            # started inside landing range, and only the top scene receives
+            # input). Loud rather than silently wrong: landing mid-jump would
+            # settle fares for a system the player is merely passing through.
+            raise ValueError("cannot land while a hyperspace jump is in progress")
+
+        self.reset_velocity()
+        self.refill_shields()
+
+        landed = [load for load in self._carried if load.destination == system_name]
+        self._carried = [
+            load for load in self._carried if load.destination != system_name
+        ]
+        gained = sum(load.fare for load in landed)
+        if gained:
+            self.add_credits(gained)
+        self._landed = True
+        return LandingReport(
+            system=system_name,
+            credits_gained=int(gained),
+            cargo_unloaded=sum(load.cargo_units for load in landed),
+            passengers_unloaded=sum(load.passengers for load in landed),
+            unloaded=tuple(landed),
+        )
+
+    def launch(self) -> None:
+        """Leave the spaceport: stopped dead, then immune for the grace period.
+
+        Idempotent by design: the ``Launch!`` button pops a scene and a stray
+        second call must not re-arm the immunity clock (that would make the
+        grace period a repeatable invulnerability cheat).
+        """
+        if not self._landed:
+            return
+        self._landed = False
+        self.reset_velocity()
+        self._launch_immunity_frames = self.launch_immunity_frames
+
+    @property
+    def immune_to_damage(self) -> bool:
+        """True while landed, and for the grace period after launching.
+
+        Stage 11's damage path asks this before applying a hit. Landed is
+        included because the spec's "no damage while landed" should not depend on
+        whether the simulation happens to be paused under the spaceport modal.
+        """
+        return self._landed or self._launch_immunity_frames > 0
+
+    @property
+    def launch_immunity_frames_left(self) -> int:
+        """Frames of post-launch immunity remaining (readout/tests seam)."""
+        return self._launch_immunity_frames
+
+    # -- port services: refuel, repair, upgrades --------------------------
+
+    @property
+    def fuel_room(self) -> float:
+        """Unused tank capacity in units."""
+        return max(0.0, self.stats.fuel_capacity - self._fuel)
+
+    @property
+    def armor_damage(self) -> float:
+        """Armour points missing from the hull."""
+        return max(0.0, self.stats.max_armor - self.stats.armor)
+
+    def fuel_top_up_cost(self, units: "float | None" = None) -> float:
+        """What the port charges to pump ``units`` (all free room by default).
+
+        A preview, so the spaceport can print the price before the player buys,
+        and a test can pin the rate without a scene in the way.
+        """
+        wanted = self.fuel_room if units is None else min(float(units), self.fuel_room)
+        return max(0.0, wanted) * self.economy.fuel_price_per_unit
+
+    def repair_top_up_cost(self, points: "float | None" = None) -> float:
+        """What the port charges to patch ``points`` of armour (all of it by default)."""
+        wanted = self.armor_damage if points is None else min(float(points), self.armor_damage)
+        return max(0.0, wanted) * self.economy.repair_price_per_point
+
+    def buy_fuel(self, units: "float | None" = None) -> PortTransaction:
+        """Buy fuel at ``economy.fuel_cost_per_unit``, never overfilling the tank.
+
+        All-or-nothing: no partial fill when the player cannot pay, because a
+        silent half-fill for the same money is the sort of generosity that
+        produces un-debuggable balance bugs. Never drops the balance to the
+        credit floor.
+        """
+        room = self.fuel_room
+        if room <= _FULL_EPSILON:
+            return PortTransaction(False, "The tank is already full.")
+        wanted = room if units is None else min(max(0.0, float(units)), room)
+        if wanted <= _FULL_EPSILON:
+            return PortTransaction(False, "Nothing to refuel.")
+
+        cost = wanted * self.economy.fuel_price_per_unit
+        if not self.can_afford(cost):
+            return PortTransaction(
+                False,
+                f"Not enough credits: {int(wanted)} "
+                f"{pluralise(int(wanted), 'unit')} of fuel costs "
+                f"{format_credits(cost)} credits.",
+            )
+        self._credits -= cost
+        self._fuel = self._fuel + wanted
+        return PortTransaction(
+            succeeded=True,
+            reason=(
+                f"Refuelled {int(wanted)} {pluralise(int(wanted), 'unit')} for "
+                f"{format_credits(cost)} credits."
+            ),
+            credits_spent=cost,
+        )
+
+    def repair_armor(self, points: "float | None" = None) -> PortTransaction:
+        """Patch armour at ``economy.repair_cost_per_point``.
+
+        Shields are not sold: the spec recharges them free on landing, so a
+        "repair shields" option would be a second, contradictory answer to the
+        same problem. Only the hull stays broken until paid for.
+        """
+        missing = self.armor_damage
+        if missing <= _FULL_EPSILON:
+            return PortTransaction(False, "The hull is already intact.")
+        wanted = missing if points is None else min(max(0.0, float(points)), missing)
+        if wanted <= _FULL_EPSILON:
+            return PortTransaction(False, "Nothing to repair.")
+
+        cost = wanted * self.economy.repair_price_per_point
+        if not self.can_afford(cost):
+            return PortTransaction(
+                False,
+                f"Not enough credits: {int(wanted)} "
+                f"{pluralise(int(wanted), 'point')} of armour costs "
+                f"{format_credits(cost)} credits.",
+            )
+        self._credits -= cost
+        self.stats.armor = self.stats.armor + wanted
+        return PortTransaction(
+            succeeded=True,
+            reason=(
+                f"Repaired {int(wanted)} {pluralise(int(wanted), 'point')} of armour "
+                f"for {format_credits(cost)} credits."
+            ),
+            credits_spent=cost,
+        )
+
+    def purchase_upgrade(self, offer: UpgradeOffer) -> PortTransaction:
+        """Buy one upgrade level: price checked, level bumped, stats applied.
+
+        The price is recomputed from the config curve rather than trusted from
+        the offer, and the offer must be for the *next* level of that stat. Those
+        two checks together close the two glitches: replaying the same offer
+        would otherwise buy a second level at the old (cheaper) price, and a
+        stale offer from an earlier visit would otherwise buy a level the ship
+        already has.
+        """
+        if offer.stat not in self._upgrade_levels:
+            raise ValueError(f"unknown upgrade stat: {offer.stat!r}")
+        label = UPGRADE_LABELS[offer.stat]
+        current = self._upgrade_levels[offer.stat]
+        if current >= self.economy.upgrade_max_level:
+            return PortTransaction(
+                False, f"{label} is already at the maximum level."
+            )
+        if offer.level != current + 1:
+            return PortTransaction(
+                False,
+                f"That {label} offer is out of date: the ship is at level {current}.",
+            )
+
+        cost = upgrade_cost(
+            offer.level,
+            self.economy.upgrade_base_cost,
+            self.economy.upgrade_cost_multiplier,
+        )
+        if not self.can_afford(cost):
+            return PortTransaction(
+                False,
+                f"Not enough credits: {label} level {offer.level} costs "
+                f"{format_credits(cost)} credits.",
+            )
+
+        self._credits -= cost
+        self._upgrade_levels[offer.stat] = offer.level
+        apply_upgrade(self.stats, offer.stat, self._upgrade_steps[offer.stat])
+        return PortTransaction(
+            succeeded=True,
+            reason=(
+                f"Installed {label} level {offer.level} for "
+                f"{format_credits(cost)} credits."
+            ),
+            credits_spent=cost,
+        )
+
+    def can_afford(self, cost: float) -> bool:
+        """True when paying ``cost`` leaves the balance strictly above the floor.
+
+        Public because the spaceport greys out buttons with exactly this test: a
+        view that re-derives affordability in its own arithmetic is a second
+        answer to the question, and the two disagree first at the boundary (a
+        purchase that would leave the player with *exactly* 0 credits is refused,
+        per the Stage 9 gate).
+        """
+        cost = float(cost)
+        if cost <= 0.0:
+            return True  # a free service can never be blocked by the floor
+        return self._credits - cost > CREDIT_FLOOR
+
     @property
     def reverse_state(self) -> str:
         return self._reverse_state
@@ -176,6 +615,20 @@ class GameState:
     def advance_frame(self) -> None:
         """Advance the simulation by exactly one fixed timestep (1/60 s)."""
         self._boundary_reached_this_frame = False
+
+        # Post-launch damage immunity ticks down on every frame, jump or
+        # no jump. The grace period is meant to span the whole jump and the
+        # landing it delivers, not just the landing.
+        if self._launch_immunity_frames > 0:
+            self._launch_immunity_frames -= 1
+
+        if self._landed:
+            # The ship is on the ground: the spaceport modal is on top of the
+            # scene stack so nothing should be driving this, but a stray frame
+            # from tooling or a future modal must not fly the ship out of the
+            # system it parked in. The immunity clock above still ticks: the
+            # grace period is measured from launch, not from the last frame.
+            return
 
         if self._jumping:
             # All input is ignored during a jump, and the jump is the only way
