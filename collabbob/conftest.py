@@ -16,9 +16,22 @@ ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
+import pygame
 import pytest
 
 from src.config import CONFIG_FILES, base_config
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _pygame_headless_init():
+    """Initialize pygame with dummy drivers once for the entire test session.
+
+    Many tests (especially Stage 2+) need a valid display surface for
+    pygame_gui UIManagers and font rendering.
+    """
+    pygame.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1024, 768))
 
 
 @pytest.fixture

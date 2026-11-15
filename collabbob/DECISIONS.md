@@ -3,6 +3,27 @@
 What follows is a record of decisions made by the implementing LLM
 to handle anything that the spec didn't make explicit.
 
+## Stage 2 — Scene manager + title screen
+
+- **Scene stack design**: a `SceneManager` holds a list-based stack of `Scene` objects.
+  Only the top scene receives `handle_event()` and `update()`. All scenes are drawn
+  bottom-to-top so modal overlays (e.g. the difficulty dialog) appear correctly layered
+  over the scenes beneath them.
+- **Difficulty dialog**: implemented as a `DifficultyDialog` scene pushed on top of the
+  `TitleScene`. It draws a semi-transparent overlay so the title is visible behind it.
+  Selecting a difficulty pops the dialog, then replaces the `TitleScene` with a
+  `PlaceholderScene`, leaving a single-entry stack.
+- **PlaceholderScene**: a temporary stub scene used as the Stage 2 gate target. It will
+  be replaced by the full tactical display in Stage 4. ESC returns to the title screen.
+- **Audio**: `AudioSystem` is a fail-soft singleton constructed in `main()` and stored on
+  the `SceneManager`. Scenes access it via `self._manager.audio`. The confirmation beep is
+  generated with `stdlib.array` + `pygame.mixer.Sound(buffer=...)` as required by the spec.
+- **`FixedTimestepLoop` refactored**: the loop now accepts an optional `scene_manager` and
+  `screen` parameter; `on_step` is kept for stage-1 backward compatibility. When a
+  `SceneManager` is supplied, events are routed to it and it drives update + draw each frame.
+- **Window caption** ("The velocity of escape") is set in `main()` via
+  `pygame.display.set_caption()` once the display surface is created.
+
 ## Stage 1 — Walking skeleton + tooling
 
 - The three config files use the full key set from the spec sketch, with

@@ -644,10 +644,9 @@ The game should have a hermetic test suite. Suggestions:
 ## Dev plan
 
 The game is too large and complicated to implement in a single pass.
-Implement exactly one stage below at a time, and do a checkpoint commit
-with a brief message indicating the stage number that was just completed.
-Do not push to the remote. Each stage must be runnable, with all tests green,
-before commit.
+Implement exactly one stage below at a time. Don't commit or push when
+done! Report stage completion and stop so that manual review can be
+performed before committing and proceeding to next stage.
 
 Implementation note: if the spec is silent or underspecified on any point,
 make an implementation decision and append it to `DECISIONS.md` in the project
