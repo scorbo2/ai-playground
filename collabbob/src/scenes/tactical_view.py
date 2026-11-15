@@ -18,6 +18,7 @@ import math
 import pygame
 
 from src.camera import world_to_screen
+from src.input import Action, InputLayer
 from src.model.game_state import GameState
 from src.model.starfield import Starfield
 from src.scene_manager import Scene
@@ -38,6 +39,8 @@ class TacticalView(Scene):
         """Build the tactical view with its game state and cached ship sprite."""
         super().__init__()
         self._manager = manager
+        # The input layer sits between raw pygame events and the simulation.
+        self.input = InputLayer()
         self.configs = manager.configs["config_easy.json"]
         self.game_state = GameState(self.configs)
         self.starfield = Starfield(
@@ -53,6 +56,47 @@ class TacticalView(Scene):
 
     def on_exit(self) -> None:
         super().on_exit()
+
+    # ------------------------------------------------------------------
+    # Event + update plumbing (Stage 5 input layer)
+    # ------------------------------------------------------------------
+    def handle_event(self, event) -> None:
+        """Route every pygame event into the input layer for later draining."""
+        self.input.feed_event(event)
+
+    def update(self) -> None:
+        """Drain one frame: feed ship controls and advance the simulation."""
+        control_frame, actions = self.input.drain_frame()
+        if control_frame is not None:
+            self.game_state.feed_input(
+                thrust=control_frame.thrust,
+                left=control_frame.left,
+                right=control_frame.right,
+                reverse_edge=control_frame.reverse_edge,
+            )
+        # Advance the pure model by exactly one fixed timestep.
+        self.game_state.advance_frame()
+        for action in actions:
+            self.on_action(action)
+
+    def on_action(self, action: Action) -> None:
+        """Dispatch a discrete action from the input layer.
+
+        Stage 5 registers the bindings here. Firing produces no projectile yet;
+        the other bindings are accepted so later stages can wire handlers
+        without re-registering them.
+        """
+        if action.kind == "fire":
+            self._on_fire()
+        else:
+            # open_map / jump / land / scan / exit_game are registered but
+            # handled in their owning stages; nothing to do yet.
+            pass
+
+    def _on_fire(self) -> None:
+        """Record a fired shot. Projectile generation is added in Stage 11."""
+        # Intentionally empty for now: space fires without creating a projectile.
+        pass
 
     # ------------------------------------------------------------------
     # Drawing

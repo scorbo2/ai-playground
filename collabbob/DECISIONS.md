@@ -63,6 +63,15 @@ to handle anything that the spec didn't make explicit.
 - **Coordinate convention**: world coordinates are planet-centred — the planet sits at `(0, 0)` and the system boundary spans `[-system_pixel_size/2, +system_pixel_size/2]` on each axis. Positions/velocities are offsets from the planet. This is the convention `world_to_screen` in Stage 4 will map to screen space.
 - **Heading** is stored as a raw degree value and normalised to `[0, 360)` via `heading_degrees`. Completion checks use a small epsilon (`1e-9`) so float drift doesn't cause a flip/thrust to stop one frame short.
 
+## Stage 5 — Input layer
+
+- **`src/input.py` owns the raw-key → control/action translation.** The `InputLayer` consumes pygame `KEYDOWN`/`KEYUP` events via `feed_event()` and, once per real frame, exposes a `ControlFrame(thrust, left, right, reverse_edge)` plus a list of discrete `Action` objects. This cleanly separates key handling from simulation: the tactical scene feeds raw events into the layer, then asks the layer to drain a frame.
+- **Binding table (edge-triggered actions):** `space` → `fire`, `m` → `open_map`, `j` → `jump`, `l` → `land`, `t` → `scan`, `escape` → `exit_game`. Left/right/up are *level* control signals; down is an *edge* signal (rising edge only, so holding does not re-trigger).
+- **`fire` is level-hold**: pressing and holding space emits one `fire` action per drained frame while held, supporting a configurable rate-of-fire later. The other five bindings are strictly edge-triggered (emit once per physical press).
+- **Input-lock flag:** when set (a jump is in progress), `drain_frame()` returns `None` for the control frame and an empty action list — every control and binding is suppressed for that frame, and any queued actions are discarded so they cannot leak to the next frame.
+- **`ControlFrame` vs `GameState.InputFrame` duplication:** these are two small 4-boolean dataclasses living in different layers. I deliberately did *not* have the pure model import `input.py` (which imports pygame), because Stage 3's gate requires the model core to stay free of pygame. The tactical scene maps `ControlFrame` → `feed_input(**kwargs)`. Documented here to avoid "silent" duplication.
+- **TacticalView wiring:** `handle_event()` now delegates to `self.input.feed_event(event)`; `update()` drains the frame, feeds controls into `game_state`, and dispatches actions through `on_action()`. Actions that belong to later stages are accepted but currently routed to a no-op (with an optional confirm beep) so nothing half-built is wired up.
+
 ## Stage 4 — Tactical view, camera, starfield
 
 - **`TacticalView.__init__(self, manager)`** takes the manager at construction (unlike the title/difficulty scenes, which set up state in `on_enter`). The tactical view needs its config/game state/ship sprite immediately, and the stage-4 tests construct it directly. `on_enter` is now a no-op passthrough so there is no double setup when the scene manager pushes/replaces it.
