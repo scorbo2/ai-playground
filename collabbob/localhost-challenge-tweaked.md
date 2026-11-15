@@ -670,8 +670,7 @@ adds keys must add the config files + fixture changes in the same commit as the 
 - **Stage 3** — Pure model core (no pygame). GameState, player ship, stat blocks, injectable RNG, fixed-timestep
   integrator with bounded accumulator, acceleration/top speed/Newtonian drift, turn rate, reverse-course 180° edge-trigger
   state machine, fuel accounting. Gate: unit tests — 60 frames of thrust from rest with acc 0.2/top 5 reaches exactly 5 px/frame;
-  velocity persists with no input; Down rotates exactly 180° in exactly 60 frames (or per config); a second Down press without release does
-  nothing; Down mid-rotation restarts from current heading.
+  velocity persists with no input; Down rotates exactly 180° in exactly 60 frames (or per config); pressing Down mid-rotation restarts from current heading.
 - **Stage 4** — Tactical view, camera, starfield. 683px view, ship centred, `world_to_screen` as a pure function, planet
   at world origin, procedurally drawn blocky shuttle (cached surface rotation), 150 world-anchored recycling stars, no ship/planet collision.
   Gate: star count invariant over 1000 frames; rightward movement shifts stars left by the same delta; `world_to_screen` golden tests.

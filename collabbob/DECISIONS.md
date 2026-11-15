@@ -3,27 +3,6 @@
 What follows is a record of decisions made by the implementing LLM
 to handle anything that the spec didn't make explicit.
 
-## Stage 2 — Scene manager + title screen
-
-- **Scene stack design**: a `SceneManager` holds a list-based stack of `Scene` objects.
-  Only the top scene receives `handle_event()` and `update()`. All scenes are drawn
-  bottom-to-top so modal overlays (e.g. the difficulty dialog) appear correctly layered
-  over the scenes beneath them.
-- **Difficulty dialog**: implemented as a `DifficultyDialog` scene pushed on top of the
-  `TitleScene`. It draws a semi-transparent overlay so the title is visible behind it.
-  Selecting a difficulty pops the dialog, then replaces the `TitleScene` with a
-  `PlaceholderScene`, leaving a single-entry stack.
-- **PlaceholderScene**: a temporary stub scene used as the Stage 2 gate target. It will
-  be replaced by the full tactical display in Stage 4. ESC returns to the title screen.
-- **Audio**: `AudioSystem` is a fail-soft singleton constructed in `main()` and stored on
-  the `SceneManager`. Scenes access it via `self._manager.audio`. The confirmation beep is
-  generated with `stdlib.array` + `pygame.mixer.Sound(buffer=...)` as required by the spec.
-- **`FixedTimestepLoop` refactored**: the loop now accepts an optional `scene_manager` and
-  `screen` parameter; `on_step` is kept for stage-1 backward compatibility. When a
-  `SceneManager` is supplied, events are routed to it and it drives update + draw each frame.
-- **Window caption** ("The velocity of escape") is set in `main()` via
-  `pygame.display.set_caption()` once the display surface is created.
-
 ## Stage 1 — Walking skeleton + tooling
 
 - The three config files use the full key set from the spec sketch, with
@@ -51,4 +30,35 @@ to handle anything that the spec didn't make explicit.
   `config_factory` fixture and `pump_events`/`advance` helpers in
   `src/harness.py`.
 
+## Stage 2 — Scene manager + title screen
 
+- **Scene stack design**: a `SceneManager` holds a list-based stack of `Scene` objects.
+  Only the top scene receives `handle_event()` and `update()`. All scenes are drawn
+  bottom-to-top so modal overlays (e.g. the difficulty dialog) appear correctly layered
+  over the scenes beneath them.
+- **Difficulty dialog**: implemented as a `DifficultyDialog` scene pushed on top of the
+  `TitleScene`. It draws a semi-transparent overlay so the title is visible behind it.
+  Selecting a difficulty pops the dialog, then replaces the `TitleScene` with a
+  `PlaceholderScene`, leaving a single-entry stack.
+- **PlaceholderScene**: a temporary stub scene used as the Stage 2 gate target. It will
+  be replaced by the full tactical display in Stage 4. ESC returns to the title screen.
+- **Audio**: `AudioSystem` is a fail-soft singleton constructed in `main()` and stored on
+  the `SceneManager`. Scenes access it via `self._manager.audio`. The confirmation beep is
+  generated with `stdlib.array` + `pygame.mixer.Sound(buffer=...)` as required by the spec.
+- **`FixedTimestepLoop` refactored**: the loop now accepts an optional `scene_manager` and
+  `screen` parameter; `on_step` is kept for stage-1 backward compatibility. When a
+  `SceneManager` is supplied, events are routed to it and it drives update + draw each frame.
+- **Window caption** ("The velocity of escape") is set in `main()` via
+  `pygame.display.set_caption()` once the display surface is created.
+
+
+## Stage 3 — Pure model core (no pygame)
+
+- **`GameState` takes a flat merged config dict**, not the loader's filename-keyed dict. `load_config()` returns `{filename: values}`; gameplay needs one difficulty's flat values, so tests extract `loaded["config_easy.json"]`.
+- **Reverse-course frame count is derived from `turn_rate_deg_per_sec`** (default 180°/s → 3°/frame at fixed 60FPS → exactly 60 frames for a 180° flip). This keeps the behaviour config-driven rather than hard-coded.
+- **Thrust caps velocity magnitude by rescaling**, not naive clamping: when the acceleration step would push speed over `top_speed`, the velocity vector is scaled down to land *exactly* on `top_speed`. Naive accumulation left it at `4.9999…`; rescaling yields exactly `5.0`.
+- **Fuel burn** comes from `tactical.fuel_burn_per_frame` and is consumed once per thrusting frame. Reverse-course flips and inertial drift consume no fuel. Fuel is clamped to zero and has a clamping setter so it can be set/patched in tests.
+- **Reverse-course is a pure rotation**: no thrust, no fuel, no velocity or position change. While flipping, left/right arrow rotation is ignored (the auto-flip takes priority).
+- **Reverse-course restart semantics**: pressing Down while idle begins a flip from the current heading; pressing it again mid-flip resets the flip origin to the current heading and continues toward a fresh +180° target (so completion takes another full 60 frames, ending at `start + 210°` in the test).
+- **Coordinate convention**: world coordinates are planet-centred — the planet sits at `(0, 0)` and the system boundary spans `[-system_pixel_size/2, +system_pixel_size/2]` on each axis. Positions/velocities are offsets from the planet. This is the convention `world_to_screen` in Stage 4 will map to screen space.
+- **Heading** is stored as a raw degree value and normalised to `[0, 360)` via `heading_degrees`. Completion checks use a small epsilon (`1e-9`) so float drift doesn't cause a flip/thrust to stop one frame short.
