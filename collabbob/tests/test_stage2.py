@@ -5,10 +5,10 @@ import pygame_gui
 import pytest
 
 from src.audio import AudioSystem
-from src.config import CONFIG_FILES, load_config
+from src.config import CONFIG_FILES, base_config, load_config
 from src.scene_manager import Scene, SceneManager
 from src.scenes.difficulty_dialog import DifficultyDialog
-from src.scenes.placeholder import PlaceholderScene
+from src.scenes.tactical_view import TacticalView
 from src.scenes.title_screen import TitleScene
 
 
@@ -30,9 +30,9 @@ class _MockManager:
 
     def __init__(self, configs=None):
         self.configs = configs or {
-            "config_easy.json": {"diff": "easy"},
-            "config_medium.json": {"diff": "medium"},
-            "config_hard.json": {"diff": "hard"},
+            "config_easy.json": base_config(),
+            "config_medium.json": base_config(),
+            "config_hard.json": base_config(),
         }
         self.audio = _MockAudio()
         self.selected_difficulty = None
@@ -237,7 +237,7 @@ def test_difficulty_cancel_pops_dialog():
 
 
 def test_difficulty_easy_selection_stores_difficulty_and_replaces_scene():
-    """Selecting Easy stores the difficulty and transitions to PlaceholderScene."""
+    """Selecting Easy stores the difficulty and transitions to TacticalView."""
     mock = _MockManager()
     dialog = DifficultyDialog()
     dialog.on_enter(mock)
@@ -246,10 +246,10 @@ def test_difficulty_easy_selection_stores_difficulty_and_replaces_scene():
     dialog.handle_event(_btn_pressed_event(easy_btn))
 
     assert mock.selected_difficulty == "easy"
-    assert mock.selected_config == {"diff": "easy"}
+    assert mock.selected_config == base_config()
     assert mock.popped_count == 1
     assert len(mock.replaced) == 1
-    assert isinstance(mock.replaced[0], PlaceholderScene)
+    assert isinstance(mock.replaced[0], TacticalView)
     assert mock.audio.confirm_count == 1
 
 
@@ -283,42 +283,6 @@ def test_difficulty_dialog_draws_without_crash():
 
 
 # ---------------------------------------------------------------------------
-# Placeholder scene
-# ---------------------------------------------------------------------------
-
-
-def test_placeholder_draws_difficulty_name():
-    screen = pygame.display.get_surface()
-    audio = AudioSystem()
-    manager = SceneManager(screen=screen, configs={}, audio=audio)
-    manager.selected_difficulty = "hard"
-
-    scene = PlaceholderScene()
-    manager.push(scene)
-    surface = pygame.Surface((1024, 768))
-    scene.draw(surface)
-    manager.pop()
-
-
-def test_placeholder_esc_replaces_with_title_scene():
-    """ESC in the placeholder scene returns to the title screen."""
-    mock = _MockManager()
-    scene = PlaceholderScene()
-    scene.on_enter(mock)
-
-    esc_event = pygame.event.Event(pygame.KEYDOWN, {
-        "key": pygame.K_ESCAPE,
-        "mod": 0,
-        "unicode": "",
-        "scancode": 0,
-    })
-    scene.handle_event(esc_event)
-
-    assert len(mock.replaced) == 1
-    assert isinstance(mock.replaced[0], TitleScene)
-
-
-# ---------------------------------------------------------------------------
 # Integration: full SceneManager flow with real scenes
 # ---------------------------------------------------------------------------
 
@@ -345,9 +309,9 @@ def test_integration_new_game_full_flow(config_factory):
     easy_btn = next(b for b, (k, _) in dialog._buttons.items() if k == "easy")
     manager.handle_event(_btn_pressed_event(easy_btn))
 
-    # PlaceholderScene replaces the whole stack
+    # TacticalView replaces the whole stack
     assert len(manager._stack) == 1
-    assert isinstance(manager._stack[-1], PlaceholderScene)
+    assert isinstance(manager._stack[-1], TacticalView)
     assert manager.selected_difficulty == "easy"
     assert manager.running
 

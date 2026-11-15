@@ -10,6 +10,7 @@ returning the player to the title screen.
 import pygame
 import pygame_gui
 
+from src.scenes.tactical_view import TacticalView
 from src.scene_manager import Scene
 
 _SCREEN_SIZE = (1024, 768)
@@ -98,8 +99,7 @@ class DifficultyDialog(Scene):
             # Save manager ref before pop() nulls self._manager via on_exit.
             manager = self._manager
             manager.pop()  # pops self; stack now has [TitleScene]
-            from src.scenes.placeholder import PlaceholderScene  # avoid circular
-            manager.replace(PlaceholderScene())  # replaces TitleScene
+            manager.replace(TacticalView(manager))  # replaces TitleScene with the game view
 
     def update(self) -> None:
         self._ui.update(1.0 / 60.0)
