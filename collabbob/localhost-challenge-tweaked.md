@@ -25,7 +25,7 @@ the player.
 ## Technical constraints
 
 This is a Python project:
-- only dependencies are `pygame-ce` and `pygame_gui`
+- only dependencies are `pygame-ce`, `pygame_gui`, `pydantic`, and `loguru`
   (recommend pinning `pygame_gui` version `0.6.11` from June 2024 to avoid
   API drift introduced in `0.6.12`, but this is up to the implementor).
   Pytest is a permitted additional dev dependency.
