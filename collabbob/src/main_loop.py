@@ -39,6 +39,7 @@ class FixedTimestepLoop:
         self._on_step = on_step
         self._scene_manager = scene_manager
         self._accumulator = 0.0
+        self._running = True
 
     def step(self):
         """Perform one fixed-timestep (1/60 s) simulation update."""
@@ -47,30 +48,46 @@ class FixedTimestepLoop:
         if self._scene_manager is not None:
             self._scene_manager.update()
 
+    def step_once(self, events=None, dt: float = FIXED_DT) -> bool:
+        """Run exactly one real-frame iteration: events, update, draw, flip.
+
+        Exposed for the headless integration tests. ``run()`` blocks on the
+        60FPS clock until the window closes, and reimplementing its body inside a
+        test (as the Stage 6 tests did) silently skips whatever the loop wires
+        up — which is exactly how a change that froze the whole game kept the
+        suite green. Returns whether the loop should keep running.
+
+        ``dt`` defaults to one fixed step so a test calling this N times gets
+        exactly N simulation frames.
+        """
+        if events is None:
+            events = pygame.event.get()
+
+        for event in events:
+            if event.type == pygame.QUIT:
+                self._running = False
+                if self._scene_manager is not None:
+                    self._scene_manager.quit()
+            elif self._scene_manager is not None:
+                self._scene_manager.handle_event(event)
+
+        if self._scene_manager is not None and not self._scene_manager.running:
+            self._running = False
+
+        self._accumulator = min(self._accumulator + dt, ACCUMULATOR_LIMIT)
+        if self._accumulator >= FIXED_DT:
+            self._accumulator -= FIXED_DT
+            self.step()
+
+        if self._scene_manager is not None:
+            self._scene_manager.draw()
+
+        pygame.display.flip()
+        return self._running
+
     def run(self):
         """Run the loop until the window is closed or the scene manager quits."""
         clock = pygame.time.Clock()
-        running = True
-        while running:
+        while self._running:
             dt = clock.tick(60) / 1000.0
-
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    running = False
-                    if self._scene_manager is not None:
-                        self._scene_manager.quit()
-                elif self._scene_manager is not None:
-                    self._scene_manager.handle_event(event)
-
-            if self._scene_manager is not None and not self._scene_manager.running:
-                running = False
-
-            self._accumulator = min(self._accumulator + dt, ACCUMULATOR_LIMIT)
-            if self._accumulator >= FIXED_DT:
-                self._accumulator -= FIXED_DT
-                self.step()
-
-            if self._scene_manager is not None:
-                self._scene_manager.draw()
-
-            pygame.display.flip()
+            self.step_once(pygame.event.get(), dt)

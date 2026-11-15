@@ -5,10 +5,10 @@ import pygame_gui
 import pytest
 
 from src.audio import AudioSystem
-from src.config import CONFIG_FILES, base_config, load_config
+from src.config import base_config, load_config
 from src.scene_manager import Scene, SceneManager
 from src.scenes.difficulty_dialog import DifficultyDialog
-from src.scenes.tactical_view import TacticalView
+from src.scenes.game_scene import GameScene
 from src.scenes.title_screen import TitleScene
 
 
@@ -57,6 +57,10 @@ class _MockManager:
 
     def replace(self, scene):
         self.replaced.append(scene)
+
+    def game_config(self):
+        """Gameplay scenes ask the manager which difficulty the player picked."""
+        return self.configs["config_easy.json"]
 
 
 def _btn_pressed_event(btn):
@@ -215,6 +219,75 @@ def test_title_draws_without_crash():
         scene.on_exit()
 
 
+def test_title_draw_repaints_the_whole_window_so_no_stale_pixels_survive():
+    """A full-window scene must clear pixels it never draws.
+
+    GIVEN a window pre-filled with the difficulty dialog's panel colour - exactly
+    what a cancelled dialog leaves behind
+    WHEN the title scene draws one frame
+    THEN no sampled pixel anywhere on the window still shows that colour.
+
+    The first revision only blitted ``resources/title_screen.png``, and that image
+    is partially transparent (see scripts/generate_title_screen.py), so the blit
+    composited the title *over* the dialog instead of replacing it: the cancelled
+    dialog stayed visible, and the title glyphs re-composited over their own
+    previous frames and saturated to solid white.
+    """
+    from src.scenes.difficulty_dialog import _PANEL_FILL
+
+    scene = TitleScene()
+    scene.on_enter(_MockManager())
+    try:
+        surface = pygame.Surface((1024, 768))
+        surface.fill(_PANEL_FILL)
+        scene.draw(surface)
+
+        stale = [
+            (x, y)
+            for y in range(0, 768, 6)
+            for x in range(0, 1024, 6)
+            if surface.get_at((x, y))[:3] == _PANEL_FILL
+        ]
+        assert not stale, f"{len(stale)} stale pixels survived the title redraw: {stale[:5]}"
+    finally:
+        scene.on_exit()
+
+
+def test_shipped_title_background_image_is_fully_opaque():
+    """The title background asset must be opaque, whatever generated it.
+
+    A translucent background turns the title screen into a compositor over the
+    previous frame's contents. The generator script used to draw its gradient on an
+    SRCALPHA surface with 3-tuple colours on a 4px stride, which left most rows at
+    alpha 0 - so this asserts the shipped asset, not just the generator.
+    """
+    import os
+
+    from src.scenes.title_screen import _BG_PATH
+
+    if not os.path.exists(_BG_PATH):
+        pytest.skip("title background asset is optional (fail-soft in TitleScene)")
+
+    image = pygame.image.load(_BG_PATH)
+    assert image.get_size() == (1024, 768), "title background must cover the window"
+
+    # Sample every row (the historical defect was row-banded: the gradient drew one
+    # line every 4 pixels and left the rows between them at alpha 0) at several
+    # columns, so a stride that happens to match the band period cannot hide it.
+    columns = [0, image.get_width() // 5, image.get_width() // 2,
+               3 * image.get_width() // 4, image.get_width() - 1]
+    transparent = [
+        (x, y)
+        for y in range(image.get_height())
+        for x in columns
+        if image.get_at((x, y)).a != 255
+    ]
+    assert not transparent, (
+        f"title background is translucent at {len(transparent)} sampled pixels "
+        f"(first few: {transparent[:5]})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Difficulty dialog
 # ---------------------------------------------------------------------------
@@ -237,7 +310,7 @@ def test_difficulty_cancel_pops_dialog():
 
 
 def test_difficulty_easy_selection_stores_difficulty_and_replaces_scene():
-    """Selecting Easy stores the difficulty and transitions to TacticalView."""
+    """Selecting Easy stores the difficulty and transitions to the game scene."""
     mock = _MockManager()
     dialog = DifficultyDialog()
     dialog.on_enter(mock)
@@ -249,7 +322,7 @@ def test_difficulty_easy_selection_stores_difficulty_and_replaces_scene():
     assert mock.selected_config == base_config()
     assert mock.popped_count == 1
     assert len(mock.replaced) == 1
-    assert isinstance(mock.replaced[0], TacticalView)
+    assert isinstance(mock.replaced[0], GameScene)
     assert mock.audio.confirm_count == 1
 
 
@@ -309,9 +382,11 @@ def test_integration_new_game_full_flow(config_factory):
     easy_btn = next(b for b, (k, _) in dialog._buttons.items() if k == "easy")
     manager.handle_event(_btn_pressed_event(easy_btn))
 
-    # TacticalView replaces the whole stack
+    # GameScene (tactical view + HUD) replaces the whole stack. The HUD must not
+    # be a stack entry: only the top scene gets events, so a passive HUD on top
+    # would freeze the game (the Stage 6 review bug).
     assert len(manager._stack) == 1
-    assert isinstance(manager._stack[-1], TacticalView)
+    assert isinstance(manager._stack[-1], GameScene)
     assert manager.selected_difficulty == "easy"
     assert manager.running
 

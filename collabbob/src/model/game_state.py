@@ -10,6 +10,12 @@ Coordinate convention (finalised here, used by Stage 4): world coordinates are
 centred on the system's planet, whose centre sits at ``(0, 0)``. Positions and
 velocities are therefore offsets from the planet. The system boundary is a square
 spanning ``[-system_pixel_size / 2, +system_pixel_size / 2]`` on each axis.
+
+Heading convention: the tactical view is drawn on a screen whose y axis points
+*down*, so heading 0 faces east and heading 90 faces south; increasing heading
+therefore rotates the ship clockwise on screen. "Left" must *decrease* the
+heading (counter-clockwise), and the ship sprite is rotated by ``-heading``
+because ``pygame.transform.rotate`` takes positive-contrary-to-our-convention.
 """
 
 from __future__ import annotations
@@ -158,12 +164,16 @@ class GameState:
         self._reverse_state = _ReverseState.REVERSING
 
     def _apply_continuous_rotation(self) -> None:
-        """Rotate steadily while the left/right arrows are held."""
+        """Rotate steadily while the left/right arrows are held.
+
+        Left is counter-clockwise on screen, which in this y-down convention
+        means *decreasing* heading; right is the mirror image.
+        """
         rate = self.stats.turn_rate_deg_per_sec / 60.0  # deg per frame @ fixed 60FPS
         if self._input.left:
-            self.heading += rate
-        elif self._input.right:
             self.heading -= rate
+        elif self._input.right:
+            self.heading += rate
 
     def _advance_reverse_course(self) -> None:
         """Rotate one step toward the 180-degree flip target, if reversing."""

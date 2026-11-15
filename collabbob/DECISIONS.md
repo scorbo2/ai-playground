@@ -75,8 +75,201 @@ to handle anything that the spec didn't make explicit.
 ## Stage 4 — Tactical view, camera, starfield
 
 - **`TacticalView.__init__(self, manager)`** takes the manager at construction (unlike the title/difficulty scenes, which set up state in `on_enter`). The tactical view needs its config/game state/ship sprite immediately, and the stage-4 tests construct it directly. `on_enter` is now a no-op passthrough so there is no double setup when the scene manager pushes/replaces it.
-- **Flat config access**: `TacticalView` reads the flat merged config via `manager.configs["config_easy.json"]`, matching how `main.py` wires the loader's filename-keyed dict to gameplay. `GameState` still receives that flat dict (per the Stage 3 decision).
+- **Flat config access**: `TacticalView` reads the flat merged config via `manager.configs["config_easy.json"]`, matching how `main.py` wires the loader's filename-keyed dict to gameplay. `GameState` still receives that flat dict (per the Stage 3 decision). *(**superseded** — see "Stage 6 review fixes" item 8: hard-coding the easy file made every difficulty play the easy game.)*
 - **View geometry is hard-coded in code** (`VIEW_WIDTH = 683`, centre at `(341.5, 384)`), because window size/dimensions are chicken-and-egg exceptions per the spec and must not depend on the config being loaded first.
 - **Starfield recycling**: a star is recycled only when it goes *strictly outside* the visible `[-half_extent, +half_extent]` box; respawn places it inside an inset box of `[-(half_extent - spawn_margin), +(half_extent - spawn_margin)]`. With `spawn_margin` equal to a controlled movement distance, no star ever leaves during that movement, so the "shift left by exactly delta" invariant holds deterministically without recycling interference. Default `spawn_margin = 0` keeps the full view populated in gameplay.
 - **Planet colour** is chosen deterministically from `planet_diameter % len(_PLANET_COLORS)` (dicts are unhashable, so no `hash()` on config).
 - **Ship sprite**: a cached, procedurally drawn blocky cargo shuttle sized to `player_ship.length` × `player_ship.width`; each frame a rotated copy is blitted centred on the ship's world position mapped through `world_to_screen`.
+
+## Stage 6 — HUD + minimap + landing prompt
+
+> **Historical record.** The first Stage 6 revision contained real defects that the
+> stage gate did not catch. Where a bullet below contradicts the
+> "Stage 6 review fixes" section at the end of this file, **the review-fixes section
+> wins**; superseded bullets are tagged inline rather than deleted so the reasoning
+> that produced them stays visible.
+
+- **HUD is the right third of the window** (341 px wide = `1024 - 683`), implemented as a separate `HudView` scene pushed *after* `TacticalView` in the stack, so it draws on top and owns only the region `x >= VIEW_WIDTH`. This keeps the game view and HUD cleanly separated; each scene clears only its own region. *(**superseded — this froze the game**: only the top scene receives `handle_event()`/`update()`, so a passive HUD on top of the stack swallowed every keystroke. The HUD is now a component of `GameScene`; see review fix 1.)*
+- **`TacticalView.draw()` now fills only the left game-view rectangle** (`[0, VIEW_WIDTH]`) instead of the whole surface. Previously it wiped the entire screen black each frame, which would clobber the HUD drawn by `HudView`. Overlays added later (e.g. jump feedback) are confined to the game-view rect for the same reason.
+- **HUD palette and border styling live in code**, not config — even though the Stage 6 prose says "palette from config". The overarching spec rule explicitly lists "colors-as-defaults" as something that should live in code, so I kept a small `_HudPalette` (dark background, light-green text/bars, gray 2px borders) in `hud.py` and did *not* add a `hud` section to the config schema. Adding config keys would have required touching the pydantic model + all three shipped configs + `base_config()`, for styling that is better owned by presentation code. Recorded here so this "palette from config" wording isn't silently dropped.
+- **Pure functions are the testable core.** `bar_width()`, `navigation_status_text()`, `navigation_is_bold()`, `planet_arrow_direction()` (unit vector ship→planet), `arrow_quadrant()` (all four quadrants), and `minimap_scale()`/`is_planet_off_map()` live in `hud.py` with no pygame dependency, so the gate's bar-width/status-string/arrow-direction/layout tests run headless. *(**partly superseded** — `arrow_quadrant()` was deleted: it returned a quadrant label instead of a vector, was never called by the renderer, and its tests only asserted the helper against itself. `planet_minimap_marker()` + `planet_arrow_points()` are the live path now.)*
+- **Minimap scale** fits the *whole system* into the minimap's half-width: `scale = minimap_half / (system_pixel_size / 2)`. The ship sits at its world position and the planet anchors the map centre. If an entity's scaled position falls outside the minimap half-extent in either axis, it is "off-map" (`is_planet_off_map`) and gets a coloured marker (`PYRITE` for the planet, `STAR` for stars) at its scaled slot rather than a single direction arrow. *(**superseded** — the map is player-centred and off-map planets become a large arrow; see review fix 4.)*
+- **Enemies, cargo, credits, and nav-selection are read from `HudView` attributes with empty/zero defaults** (e.g. `self.enemies`, `self.nav_selected_name`). They don't exist in `GameState` yet (Stages 7/9/10/11), so later stages populate these attributes rather than reaching into unrelated modules. Stage 6 only wires the ship-status bars, which *do* exist (`fuel`, `stats.shields`, `stats.armor`).
+- **`GameState.off_map_positions`** is a new public dict (default `{}`) holding world-coordinate positions of entities pushed past the map edge, keyed by type. It is read read-only by the HUD minimap; later stages populate it instead of reaching into presentation code. *(**removed** — no stage ever wrote to it, and "the HUD asks the model for positions the HUD itself computes" is backwards coupling; see review fix 4.)*
+- **Landing prompt** ("Press L to land here") is a pure helper `landing_prompt_text(game_state, planet_pos)` returning the message when within `landing_range`, drawn over the game-view rect by `TacticalView`. *(**superseded — it was never drawn**: the helper had callers only in tests. The live path is `TacticalView._update_landing_prompt()` → `MessageOverlay`; see review fix 5.)*
+- **Ship status bars are horizontal and number-free.** Each row lays out a label then its bar side by side (spec: "labels on one row each, with a simple bar display next to each (no numbers)"). All three rows share the same left edge so every bar starts after the widest label ("shield"/"armor", 5 chars) and they all align. Rows are `LINE_HEIGHT` tall — not the old `BAR_HEIGHT` — so the ~18px label fits inside its own border box instead of overflowing it. Bars fill proportionally to `current / capacity`, using the new `max_shields`/`max_armor` capacities on `ShipStats`.
+- **Navigation status got a taller box.** Its cached rect height was raised from `BAR_HEIGHT` (8px) to `LINE_HEIGHT` so the 2px border can actually enclose the "No destination" text, and the glyph is centered vertically inside. Same fix applies conceptually to the nearest-ship readout.
+- **HUD text must render opaque.** ~~`SysFont(...).render()` returns an `SRCALPHA` surface whose glyphs carry low coverage alpha (~20/255); blitting that onto the game's non-alpha display surface alpha-blends it toward black, washing out every HUD glyph. All font renders now call `.convert()` (strips the alpha channel → opaque), and this was caught by a pixel-exact smoke test rather than remaining a visual surprise.~~ *(**wrong, and the cause of an ugly bug**: `.convert()` deletes the coverage, so every string blitted as a solid filled rectangle of its own colour. See "Manual-testing visual fixes" below.)*
+
+## Stage 6 review fixes (post-review, before Stage 7)
+
+A review of Stages 1-6 against `localhost-challenge-tweaked.md` found nine
+"do-not-skip" defects in Stage 6. All nine are fixed here; the suite went from 95
+to 143 tests. Each entry records *why*, because most of these were invisible to
+the existing per-stage tests.
+
+1. **The HUD is a component of `GameScene`, never a scene-stack entry.**
+   `SceneManager` deliberately routes `handle_event()`/`update()` to the top scene
+   only (Stage 2 decision), so pushing the input-free `HudView` above
+   `TacticalView` starved the simulation: 60 frames of held Up+Left left the ship
+   at `(0, 0)` with 1000 fuel and an empty input layer, while the suite stayed
+   green. New `src/scenes/game_scene.py` composes `TacticalView` + `HudView`; the
+   difficulty dialog now `replace()`s the title with `GameScene`, leaving exactly
+   one scene on the stack. *Rejected alternative:* make `SceneManager` update every
+   scene on the stack — that breaks the modal semantics the map/spaceport/game-over
+   stages depend on (a modal must block gameplay input), and the stack order already
+   expresses it.
+2. **`main_loop` stopped knowing scene classes.** It had grown a
+   `manager._stack[-1]` poke and an auto-push of `HudView`; a loop that imports
+   scene types silently re-couples the layers. In its place:
+   `FixedTimestepLoop.step_once(events=None, dt=FIXED_DT) -> bool` plus a thin
+   `run()` that only owns the 60FPS clock. `step_once` is the seam the integration
+   tests drive, so the wiring it exercises is the wiring that ships.
+3. **One `GameState` per play session.** `GameScene` creates it from the selected
+   config and hands the *same object* to the tactical view and the HUD;
+   `HudView.__init__(manager, game_state)` raises on `None`. The HUD used to build
+   its own `GameState`, so bars/minimap reported a phantom ship that never changed
+   while the real one flew off.
+4. **The HUD column is cleared, and so is every panel interior.** `HudView.draw()`
+   fills `x >= VIEW_WIDTH` with the HUD background before drawing anything, and
+   `_panel()` fills a component's box before stroking its 2px border, so the
+   difficulty dialog's translucent panel can no longer bleed through permanently
+   (observed: pixel `(690, 500)` read `(30, 30, 50)` forever; now `(0, 0, 0)`).
+   Clearing the row boxes is also what makes a *shrinking* bar visible: without it,
+   the previous (longer) fill survives the redraw and fuel/shield/armor read as
+   permanently full. While in there: the border stroke used `rect.right`/`rect.bottom`
+   instead of `right - 1`/`bottom - 1`, leaving the bottom and right edges unstroked.
+5. **Minimap is player-centred, per spec.** White 2x2 ship fixed at the map centre,
+   green 4x4 planet offset by `(planet - ship) * scale`, red 2x2 contacts, and a
+   *large arrow* when the planet is off-map (`planet_minimap_marker()` chooses
+   marker-vs-arrow, `planet_arrow_points()` builds the triangle). The previous
+   planet-centred map drew the ship 3x3 near the centre, never showed the planet,
+   and blitted "off-map" markers at their unscaled coordinates (one landed at
+   x = 1405, i.e. off-screen). Off-map contacts are now culled. `arrow_quadrant()`
+   and `GameState.off_map_positions` were deleted rather than kept as test-only
+   helpers: a pure helper that the production path never calls is a second,
+   unenforced implementation of the truth.
+6. **The landing prompt actually appears.** `landing_prompt_text()` had test callers
+   and no production caller. `TacticalView._update_landing_prompt()` now feeds it to
+   a new `src/overlays.py::MessageOverlay` (sticky text + transient banners,
+   de-duplicating, frame-budgeted, confined to the game-view rect). Stages 8/11 get
+   the banner seam ("System boundary reached", payouts, etc.) instead of each
+   inventing their own text drawing.
+7. **Sprite rotation: degrees, and the right sign.** `pygame.transform.rotate` takes
+   *degrees, counter-clockwise*; the code passed `math.radians(heading)`, so the
+   sprite barely moved (`rotate(radians(90))` left the nose pointing east: nose
+   centroid offset `(+14.5, -1.0)`). It is now `rotate(-heading)`, negated because
+   the model's heading is clockwise-positive in a y-down screen space
+   (`heading 0` = east, `heading 90` = south). Verified nose centroid offsets:
+   0° `(+14.5, -0.5)`, 90° `(-0.5, +14.5)`, 180° `(-15.5, -0.5)`, 270° `(-0.5, -15.5)`.
+   Related: held Left/Right were signed the wrong way (Left *increased* heading, i.e.
+   turned clockwise). Left now decreases heading; the reverse-course flip still
+   rotates in its original direction, so Stage 3's timing tests are unchanged.
+8. **Starfield scrolls, camera follows the ship.** `TacticalView.update()` calls
+   `starfield.update(vx, vy)` (it was never called, so the starfield was a static
+   wallpaper), and `world_to_screen(world_x, world_y, ship_position, view_center)`
+   pins the *ship* to the view centre, sliding the planet past it (spec: "the
+   player's ship is always centered and zoom is fixed"; the planet must be
+   something the player flies *to*). Stars stay in view space rather than being
+   world-anchored: `Starfield`'s tested "shift by exactly delta" invariants are
+   frame-relative, and world-anchoring them under a ship-locked camera would double
+   the scroll. Star box half-extent is `max(VIEW_WIDTH, 768) / 2` so the taller axis
+   is not star-free.
+9. **The selected difficulty is honoured.** `SceneManager.game_config()` returns the
+   flat dict for `selected_difficulty`, falling back to
+   `DEFAULT_DIFFICULTY_CONFIG = "config_medium.json"` if a game somehow starts with no
+   selection. Both the tactical view and `GameScene` use it; the previous literal
+   `configs["config_easy.json"]` lookups made easy/medium/hard byte-identical in play.
+10. **Integration tests exist.** `tests/test_game_flow.py` drives the real
+    `FixedTimestepLoop.step_once()` with real posted pygame events: title →
+    difficulty click → `GameScene` on a one-entry stack, hard-config values actually
+    reaching the ship, thrust moving the ship and burning fuel, rotation/reverse
+    through the whole pipeline, HUD column free of dialog residue, QUIT stopping the
+    loop. Every other stage test calls `scene.update()`/`draw()` directly, which is
+    exactly the hole the frozen-game regression fell through.
+
+Small things fixed because leaving them would have re-broken the above:
+
+- **`src/fonts.py`** caches `SysFont` (`game_font(size, bold)`) and centralises the
+  `.convert()` requirement; `hud.py` was constructing a fresh `SysFont` on every
+  render call (several per component per frame).
+- **Ship sprite nose**: the rear wings were drawn at `3 * length / 4`, which is where
+  the nose block begins, so the wings painted the nose out and every heading looked
+  identical. Wings moved aft, nose drawn last (200 nose pixels now survive at every
+  heading).
+- Dead imports/pruned helpers in `main.py`, `hud.py`, `tactical_view.py`,
+  `starfield.py`, and the stage tests.
+
+Deliberately **not** fixed in this pass (each is a later stage's job or an open
+design question, recorded so it does not get lost):
+
+- **`GameState.boundary_reached_this_frame()` always returns `False`.**
+  `_boundary_reached_this_frame` is initialised and never written. `on_boundary()`
+  does work, and the spec wants no wall — it wants a message at most once every five
+  seconds, which is Stage 8; whoever implements it must either drive that flag or
+  delete the accessor rather than leave a stub that silently lies.
+- **`rng.seed` from config is never applied.** Nothing calls `random.seed()`; and
+  since the starfield now draws numbers from `GameState.rng` (one RNG per session, on
+  purpose, for reproducibility), any future seeding must happen *before* the tactical
+  view is constructed, or be re-applied per system in Stage 7 — seeding later changes
+  the star layout too.
+- **`stats.max_shields` / `max_armor` are captured from the config at construction.**
+  The HUD reads capacity live, so Stage 12 upgrades must update the `max_*` fields or
+  the bars will misreport; nothing enforces that coupling yet.
+- **`economy.missions_min/max` in the shipped configs fall outside the spec's example
+  range** (easy 6-10, hard 3-5 vs the spec sketch's 4-8). Plausible as a difficulty
+  knob, but the pydantic schema has no numeric bounds at all, so no config range
+  violation is currently detectable.
+- **The accumulator drains at most one step per frame** (`if
+  self._accumulator >= FIXED_DT: self._accumulator -= FIXED_DT`), so a frame slower
+  than 1/60 s silently loses simulation time. The bounded accumulator is
+  spec-mandated; the "never more than one step" part is an implementation choice that
+  Stage 9+ (combat timing) may care about.
+- README/docs pass and the remaining review backlog (fuel-sufficiency landing rule,
+  system-boundary messaging) are untouched on purpose: one stage at a time.
+
+## Manual-testing visual fixes (two glitches found by eye, not by the suite)
+
+Both of these survived 152 green tests because the suite checked *which* strings
+were rendered and *where*, but never what the pixels looked like between the
+glyphs. A screenshot (dim overlay + solid text blocks) is worth several hundred
+assertions here. Screenshot added to demonstrate problem: `stage6_screenshot.png`
+
+- **All tactical/HUD text rendered as solid filled rectangles.** pygame's
+  `Font.render(antialias=True)` returns an `SRCALPHA` surface in which **every
+  pixel of the glyph box already carries the text colour** - measured on the
+  shipped font: 1765 of 2178 pixels had `alpha == 0` and RGB `(140, 255, 140)` -
+  coverage lives only in the alpha byte. The font helper called `.convert()`,
+  which converts to the display format *and throws the alpha byte away*, so the
+  whole bounding box blitted at full colour: banner, labels, and readouts each
+  became an unreadable slab. Measured effect: `convert()` → 4800 banner-coloured
+  pixels covering **100%** of the banner's bounding box; `convert_alpha()` → 87
+  pixels, **3%**.
+  `src/fonts.py::render_text` now uses `convert_alpha()` (fast display-format
+  conversion, coverage preserved). The earlier "glyphs wash out toward black, use
+  `.convert()`" decision recorded above was based on a misreading of antialiasing
+  and is retracted.
+- **A cancelled difficulty dialog stayed visible on the title screen.** The user's
+  guess - "the title screen is not clearing" - was right in effect, wrong in
+  mechanism: `TitleScene.draw()` *did* blit a full-window image every frame, but
+  `resources/title_screen.png` was generated on a `SRCALPHA` surface with 3-tuple
+  colours on a 4-pixel stride, so three of every four rows were fully transparent
+  (2880 of 3840 sampled pixels had `alpha == 0`). A translucent background makes a
+  "full-screen blit" into a *composite*: the dialog's panel `(30,30,50)`, its
+  border `(100,100,140)`, and its dim overlay stayed stamped under the title
+  (10266 dialog pixels measured inside the panel rect after cancelling), and the
+  title glyphs re-composited over their own previous frames until they saturated
+  to solid white. Three separate guards now exist, because any one of them can
+  regress alone:
+  1. `scripts/generate_title_screen.py` draws every scanline onto an **opaque**
+     surface, and the asset was regenerated.
+  2. `TitleScene.on_enter` normalises whatever asset it loads to an opaque surface
+     (composited onto the clear colour once at load), so a bad asset can never leak
+     through the per-frame blit.
+  3. `TitleScene.draw()` fills the window with `_CLEAR_COLOR` before drawing - a
+     full-window scene owns the whole window and must repaint, not composite.
+- **Test-stride gotcha worth remembering** (this one bit the regression test
+  itself): sampling `get_at` on a stride-2 grid makes a *100% filled* box measure
+  as 25% coverage. `tests/test_game_flow.py::test_tactical_text_is_readable_glyphs_not_solid_blocks`
+  therefore does a coarse pass to find the banner's bounding box and then scans
+  that box pixel-by-pixel; with the bug it reports 100%, without it 3%.

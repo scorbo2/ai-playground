@@ -3,14 +3,14 @@
 Pushed over the TitleScene when the player clicks "New game". Presents
 Easy / Medium / Hard choices plus a Cancel button. Selecting a difficulty
 stores it in the SceneManager, pops this dialog, and replaces the title
-screen with the PlaceholderScene. Cancelling simply pops this dialog,
-returning the player to the title screen.
+screen with the GameScene (tactical view + HUD). Cancelling simply pops this
+dialog, returning the player to the title screen.
 """
 
 import pygame
 import pygame_gui
 
-from src.scenes.tactical_view import TacticalView
+from src.scenes.game_scene import GameScene
 from src.scene_manager import Scene
 
 _SCREEN_SIZE = (1024, 768)
@@ -27,6 +27,11 @@ _PANEL_W = 420
 _PANEL_H = 240
 _PANEL_X = (_SCREEN_SIZE[0] - _PANEL_W) // 2
 _PANEL_Y = (_SCREEN_SIZE[1] - _PANEL_H) // 2
+
+# Panel styling. Named because the tests assert these pixels are gone again after
+# the dialog is cancelled - a colour that only existed inline could not be probed.
+_PANEL_FILL = (30, 30, 50)
+_PANEL_BORDER = (100, 100, 140)
 
 # Difficulty button layout (three across)
 _DBTN_W = 100
@@ -99,7 +104,9 @@ class DifficultyDialog(Scene):
             # Save manager ref before pop() nulls self._manager via on_exit.
             manager = self._manager
             manager.pop()  # pops self; stack now has [TitleScene]
-            manager.replace(TacticalView(manager))  # replaces TitleScene with the game view
+            # GameScene owns both the tactical view and the HUD; pushing the HUD
+            # as a separate scene would steal input from the game view.
+            manager.replace(GameScene(manager))  # replaces TitleScene with the game
 
     def update(self) -> None:
         self._ui.update(1.0 / 60.0)
@@ -109,8 +116,8 @@ class DifficultyDialog(Scene):
         surface.blit(self._overlay, (0, 0))
 
         # Panel background
-        pygame.draw.rect(surface, (30, 30, 50), (_PANEL_X, _PANEL_Y, _PANEL_W, _PANEL_H))
-        pygame.draw.rect(surface, (100, 100, 140), (_PANEL_X, _PANEL_Y, _PANEL_W, _PANEL_H), 2)
+        pygame.draw.rect(surface, _PANEL_FILL, (_PANEL_X, _PANEL_Y, _PANEL_W, _PANEL_H))
+        pygame.draw.rect(surface, _PANEL_BORDER, (_PANEL_X, _PANEL_Y, _PANEL_W, _PANEL_H), 2)
 
         # Prompt text
         prompt = self._font_title.render("Select difficulty", True, (220, 220, 255))

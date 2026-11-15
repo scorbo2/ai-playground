@@ -20,6 +20,7 @@ from src.input import (
     Action, InputLayer, KEY_DOWN, KEY_ESCAPE, KEY_J, KEY_LEFT, KEY_L,
     KEY_M, KEY_SPACE, KEY_T, KEY_UP,
 )
+from src.model.game_state import GameState
 from src.scenes.tactical_view import TacticalView
 from src.scene_manager import SceneManager
 
@@ -287,7 +288,8 @@ def test_tactical_view_update_feeds_thrust_into_game_state(config_factory):
     manager = SceneManager(
         screen=screen, configs=loaded, audio=_SilentAudio()
     )
-    view = TacticalView(manager)
+    manager.selected_config = configs
+    view = TacticalView(manager, GameState(configs))
 
     assert math.hypot(*view.game_state.velocity) == 0.0
 
@@ -308,7 +310,8 @@ def test_tactical_view_update_reverse_flip_after_60_frames(config_factory):
     manager = SceneManager(
         screen=screen, configs=loaded, audio=_SilentAudio()
     )
-    view = TacticalView(manager)
+    manager.selected_config = configs
+    view = TacticalView(manager, GameState(configs))
     view.game_state.heading_degrees = 10.0
 
     layer = view.input

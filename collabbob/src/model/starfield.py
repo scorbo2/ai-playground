@@ -10,7 +10,7 @@ moves. This is intentionally free of pygame so its invariants can be unit-tested
 from __future__ import annotations
 
 import random as _random_lib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass

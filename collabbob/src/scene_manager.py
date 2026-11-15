@@ -37,6 +37,12 @@ class Scene:
         pass
 
 
+# Fallback used only when no difficulty has been chosen yet (tests, tooling).
+# A real game reaches the gameplay scenes through the difficulty dialog, which
+# sets ``selected_config`` first.
+DEFAULT_DIFFICULTY_CONFIG = "config_medium.json"
+
+
 class SceneManager:
     """Stack-based scene manager; only the top scene is active."""
 
@@ -60,6 +66,17 @@ class SceneManager:
 
     def quit(self) -> None:
         self._running = False
+
+    def game_config(self) -> dict:
+        """The configuration the player chose at "New game".
+
+        Every gameplay scene must read its tunables through this method. Reading
+        a fixed filename (as Stages 4-6 did) silently pins the game to one
+        difficulty no matter what the player clicked.
+        """
+        if self.selected_config is not None:
+            return self.selected_config
+        return self.configs[DEFAULT_DIFFICULTY_CONFIG]
 
     def push(self, scene: Scene) -> None:
         """Push a new scene onto the top of the stack."""

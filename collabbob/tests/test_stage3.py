@@ -10,7 +10,7 @@ import random
 
 import pytest
 
-from src.config import base_config, load_config
+from src.config import load_config
 from src.model.game_state import GameState
 
 
@@ -166,11 +166,57 @@ def test_reverse_course_frame_count_tracks_turn_rate(config_factory):
     assert 1 < completed_at <= 60
 
 
-def test_left_right_rotation_moves_heading(config_factory):
-    """Holding left/right rotates the heading at the configured turn rate."""
+def test_left_arrow_rotates_the_ship_counter_clockwise_on_screen(config_factory):
+    """Holding LEFT must turn the ship counter-clockwise as the player sees it.
+
+    The view is drawn on a y-down screen, so heading 0 faces east and heading 90
+    faces south; increasing heading is therefore a *clockwise* turn and "left"
+    must decrease the heading. The first revision had these swapped, so every
+    turn input steered the ship the wrong way.
+    """
     state = _state(config_factory)
+    state.heading_degrees = 90.0  # facing straight down (south)
+
     for _ in range(20):
         state.feed_input(left=True)
         state.advance_frame()
-    expected = 20 * (state.stats.turn_rate_deg_per_sec / 60.0) % 360.0
-    assert math.isclose(state.heading_degrees, expected, abs_tol=1e-6)
+
+    rate = state.stats.turn_rate_deg_per_sec / 60.0
+    assert math.isclose(state.heading_degrees, (90.0 - 20 * rate) % 360.0, abs_tol=1e-6)
+
+    # Turning left from south heads the nose toward east (6 o'clock -> 3 o'clock).
+    facing_x, facing_y = state.facing_vector()
+    assert facing_x > 0.0, "left from south must swing the nose toward east"
+    assert facing_y > 0.0
+
+
+def test_right_arrow_rotates_the_ship_clockwise_on_screen(config_factory):
+    """Holding RIGHT is the mirror image: south swings toward west."""
+    state = _state(config_factory)
+    state.heading_degrees = 90.0  # facing straight down (south)
+
+    for _ in range(20):
+        state.feed_input(right=True)
+        state.advance_frame()
+
+    rate = state.stats.turn_rate_deg_per_sec / 60.0
+    assert math.isclose(state.heading_degrees, (90.0 + 20 * rate) % 360.0, abs_tol=1e-6)
+
+    facing_x, facing_y = state.facing_vector()
+    assert facing_x < 0.0, "right from south must swing the nose toward west"
+    assert facing_y > 0.0
+
+
+def test_left_and_right_are_symmetric_at_the_configured_turn_rate(config_factory):
+    """Equal holds in opposite directions cancel out at the configured rate."""
+    state = _state(config_factory)
+    state.heading_degrees = 37.0
+
+    for _ in range(15):
+        state.feed_input(right=True)
+        state.advance_frame()
+    for _ in range(15):
+        state.feed_input(left=True)
+        state.advance_frame()
+
+    assert math.isclose(state.heading_degrees, 37.0, abs_tol=1e-6)

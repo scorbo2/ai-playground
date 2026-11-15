@@ -20,6 +20,11 @@ class ShipStats:
     fuel_capacity: float
     passenger_space: int
     cargo_room: int
+    # Maximum values for the defence bars. ``shields`` auto-refill to this and
+    # ``armor`` never regenerates, so both are stable capacities the HUD can
+    # divide the current values against when drawing status bars.
+    max_shields: float
+    max_armor: float
     shields: float
     armor: float
     weapon_power: float
@@ -38,6 +43,8 @@ def ship_stats_from_config(player_ship: dict) -> ShipStats:
         fuel_capacity=float(player_ship["fuel_capacity"]),
         passenger_space=int(player_ship["passenger_space"]),
         cargo_room=int(player_ship["cargo_room"]),
+        max_shields=float(player_ship["shields"]),
+        max_armor=float(player_ship["armor"]),
         shields=float(player_ship["shields"]),
         armor=float(player_ship["armor"]),
         weapon_power=float(player_ship["weapon_power"]),

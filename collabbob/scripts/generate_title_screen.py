@@ -16,21 +16,29 @@ WINDOW_SIZE = (1024, 768)
 
 
 def generate_title_screen(path):
-    """Create a dark gradient title-screen background image at `path`."""
+    """Create a dark gradient title-screen background image at `path`.
+
+    The surface is deliberately opaque (no ``SRCALPHA``) and every scanline is
+    painted: drawing on an SRCALPHA surface with 3-tuple colours, and stepping the
+    gradient by more than one pixel, leaves whole bands at alpha 0. A translucent
+    title background makes the title screen composite over whatever was drawn
+    before it rather than replace it, which is how a cancelled dialog stayed
+    visible on the title screen.
+    """
     pygame.init()
-    surface = pygame.Surface(WINDOW_SIZE, pygame.SRCALPHA)
+    surface = pygame.Surface(WINDOW_SIZE)
 
     top_color = (10, 14, 24)   # very dark navy
     bottom_color = (3, 4, 8)   # near black
 
-    for y in range(0, WINDOW_SIZE[1], 4):
-        ratio = y / WINDOW_SIZE[1]
-        color = (
-            top_color[0] + (bottom_color[0] - top_color[0]) * ratio,
-            top_color[1] + (bottom_color[1] - top_color[1]) * ratio,
-            top_color[2] + (bottom_color[2] - top_color[2]) * ratio,
+    last_row = WINDOW_SIZE[1] - 1
+    for y in range(WINDOW_SIZE[1]):
+        ratio = y / last_row
+        color = tuple(
+            round(top_color[i] + (bottom_color[i] - top_color[i]) * ratio)
+            for i in range(3)
         )
-        pygame.draw.line(surface, color, (0, y), (WINDOW_SIZE[0], y), 1)
+        pygame.draw.line(surface, color, (0, y), (WINDOW_SIZE[0] - 1, y), 1)
 
     pygame.image.save(surface, path)
 
