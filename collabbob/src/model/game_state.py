@@ -25,7 +25,9 @@ import random as _random_lib
 from dataclasses import dataclass
 
 from src.model import physics
-from src.model.stats import ShipStats, ship_stats_from_config
+from src.model.factions import FACTION_PLAYER
+from src.model.stats import ShipStats, apply_damage_order, ship_stats_from_config
+from src.model.weapons import Shot, WeaponClock, weapon_cooldown_frames
 from src.model.economy import (
     CarriedLoad,
     EconomyRules,
@@ -155,6 +157,14 @@ class GameState:
         self._reverse_state: str = _ReverseState.IDLE
         self._reverse_start: float = 0.0
         self._boundary_reached_this_frame: bool = False
+
+        # The player's own gun (Stage 11). Unlimited ammunition, so the only cost
+        # of a trigger pull is the cycle time; the clock is the same
+        # :class:`~src.model.weapons.WeaponClock` an NPC hull uses, so one config
+        # value (``player_ship.weapon_fire_rate``) means one thing on both sides
+        # of the fight. Power and range are *not* copied here: upgrades mutate
+        # ``stats``, and a shot must carry whatever the gun is right now.
+        self._gun = WeaponClock()
 
         # Jump plumbing. This model owns the *mechanism* of a jump (uncapped
         # thrust along the heading, exemption from the system boundary); the
@@ -447,6 +457,73 @@ class GameState:
         """Frames of post-launch immunity remaining (readout/tests seam)."""
         return self._launch_immunity_frames
 
+    # -- Stage 11: the player's gun, and what a hit does to the hull ---------
+
+    @property
+    def gun_frames_until_ready(self) -> float:
+        """Frames before the next shot may be fired (0 when ready)."""
+        return self._gun.frames_until_ready
+
+    @property
+    def gun_cooldown_frames(self) -> float:
+        """How long this hull's gun takes to cycle, from the *live* stat block.
+
+        Read at fire time rather than cached in the clock: a weapon upgrade that
+        changes the fire rate has to change the rate of the shots the player is
+        firing right now, not the ones the config described when the game booted.
+        """
+        return weapon_cooldown_frames(self.stats.weapon_fire_rate)
+
+    def try_fire(self) -> "Optional[Shot]":
+        """Pull the trigger: a :class:`Shot` if the gun is ready, otherwise nothing.
+
+        Deliberately silent when the answer is no, because that is what the spec
+        says a reloading weapon does ("pressing space while the weapon is
+        reloading does nothing"). The fire rate is enforced by the shared
+        :class:`~src.model.weapons.WeaponClock`, so holding space produces exactly
+        ``player_ship.weapon_fire_rate`` shots per second, and tapping it faster
+        than that produces the same number.
+
+        Also silent when the ship cannot fight: on the ground, mid-jump, or
+        destroyed. A ship in hyperspace is not in the same universe as anything it
+        could hit, and a wreck does not get a last shot off.
+        """
+        if self._landed or self._jumping or self.destroyed:
+            return None
+        if not self._gun.pull(self.gun_cooldown_frames):
+            return None
+        return Shot(
+            faction=FACTION_PLAYER,
+            owner=self,
+            origin=self._position,
+            direction=self.facing_vector(),
+            ship_velocity=self._velocity,
+            # Live stats, not the starting snapshot: upgrades are how the player
+            # gets to survive a fight they started (the spec's "with enough
+            # upgrades, combat should become a viable option").
+            weapon_power=self.stats.weapon_power,
+            weapon_range=self.stats.weapon_range,
+        )
+
+    def apply_damage(self, amount: float) -> None:
+        """Shield-first, then armour — the same order an NPC hull obeys.
+
+        Shields are the only pool that recharges, and only on a jump
+        (:meth:`refill_shields`); armour stays broken until someone pays for it at
+        a spaceport. Armour at or below zero is a destroyed ship, and this does
+        not clamp there either — the caller decides what to do with the wreck, and
+        a clamped-at-zero hull would hide the difference between "dead" and
+        "very dead" from the code that reports it.
+        """
+        self.stats.shields, self.stats.armor = apply_damage_order(
+            self.stats.shields, self.stats.armor, amount
+        )
+
+    @property
+    def destroyed(self) -> bool:
+        """True once the hull is gone. Stage 13 turns this into the end screen."""
+        return self.stats.armor <= 0.0
+
     # -- port services: refuel, repair, upgrades --------------------------
 
     @property
@@ -624,6 +701,12 @@ class GameState:
     def advance_frame(self) -> None:
         """Advance the simulation by exactly one fixed timestep (1/60 s)."""
         self._boundary_reached_this_frame = False
+
+        # The gun cycles whether or not the trigger is held, and whether or not
+        # the ship can currently fly: a weapon that stopped counting during a jump
+        # (or while parked on a planet) would be ready the instant the player most
+        # needed a shot, which is a free rate-of-fire bonus nobody configured.
+        self._gun.advance_frame()
 
         # Post-launch damage immunity ticks down on every frame, jump or
         # no jump. The grace period is meant to span the whole jump and the

@@ -70,16 +70,27 @@ timestep. There is no fullscreen option.
 - `Launch!` (or `ESC`, while the spaceport is open) — leave the planet. You get
   `tactical.launch_immunity_frames` frames (2 seconds) of immunity on the way out,
   so parking in a hostile system is survivable once.
-- `T` — scan for ships in the current system (HUD "nearest ship" readout).
-  *Not live until Stage 11.*
+- `T` — scan for ships in the current system. The HUD "nearest ship" readout
+  locks onto the closest living hull and keeps showing it — alignment word plus
+  shield and armour bars — for as long as that hull is flying, even when another
+  one drifts closer. It reverts to `No target` on its own the moment the scanned
+  hull is destroyed (no keypress needed), and every new system starts at
+  `No target`. Press `T` again to re-lock on whoever is nearest right now.
 - `ESC` — close whatever modal is open (System Map, difficulty dialog). On the
   spaceport it is the same as clicking `Launch!`.
   *The "Exit game?" confirmation arrives in Stage 13; QUIT (closing the window)
   already exits the game.*
 - Arrow keys — rotate the ship (hold to keep turning, release to stop).
   `Up` applies thrust (consumes fuel); `Down` reverses course once, then stops.
-- `Space` — fire the ship's projectile weapon. *Binding registered; projectiles
-  arrive in Stage 11.*
+- `Space` — fire the ship's projectile weapon. **Hold it**, don't tap it: the gun
+  releases `player_ship.weapon_fire_rate` projectiles per second, and pulling the
+  trigger while the gun is cycling does nothing at all — silently, with no message
+  and no queued shot. A round leaves the muzzle at your own velocity *plus*
+  `combat.projectile_speed_bonus` along your heading, so a round fired forward
+  while running at 5 px/frame travels 13 px/frame and reaches its target sooner;
+  fired backward, it crawls. It flies until it hits a hull or spends
+  `player_ship.weapon_range`, whichever comes first. Firing is refused (silently)
+  while landed, while jumping, and when the hull is a wreck.
 
 ## General usage
 
@@ -117,8 +128,13 @@ timestep. There is no fullscreen option.
   (saucer), red Pirate (raider) — and the same colours mark them on the minimap.
   Pirates attack everyone, including each other's allies; Localhosters and
   Bobbers are at war with each other and leave you alone until you do something
-  about it. Nobody can shoot you yet — Stage 11 adds the projectiles — but they
-  already fly at you, so you will see a fleet close to gun range and sit there.
+  about it. Everyone shoots now: pirate rounds are red, Bobber rounds yellow,
+  Localhoster rounds cyan, and yours are green — on the hulls, on the minimap, in
+  the trails of the rounds themselves, and in the sparks a hit throws. A round
+  that lands on a Localhoster or a Bobber makes that faction permanently hostile,
+  and a faction at war with you hunts you the way pirates already do. Nobody can
+  hit what they fired themselves, and a ship never takes damage from its own
+  faction's rounds, so the traffic shoots at *you* and at each other.
 - Land with `L` at a planet to reach the spaceport, accept cargo/passenger
   contracts and ship upgrades, top up fuel and armour, then leave with `Launch!`
   or `ESC`.
@@ -169,6 +185,38 @@ Each stat is bought one level at a time, and the price of level *n* is
 on hard costs 81 times what level 1 did. A stat at `upgrade_max_level` is simply
 never offered again, and the button reads `Done` once installed. Upgrades are
 permanent for the run (a new game resets them).
+
+### Combat
+
+Shooting is the reason the factions exist, so the rules are worth stating in
+order:
+
+- **Damage eats shields first, then armour.** An NPC hull is destroyed when its
+  armour reaches 0; overkill is not clamped, so a round that lands for more than
+  the hull can absorb is simply over. The player's hull obeys the same order, and
+  it is the *same function* (`src/model/stats.py::apply_damage_order`) — two
+  implementations of "which bar goes down first" is how a game ends up with the
+  player and the NPCs playing different games.
+- **A hit is a diplomatic incident.** Any player round that lands on a Localhoster
+  or a Bobber — even one its shields soaked — makes that faction hostile for the
+  rest of the run. Pirates are already hostile, so shooting them changes nothing
+  about who is shooting at you. A stray round from a faction you are on peaceful
+  terms with damages you but does *not* start a war: collisions are not acts of
+  war, which is why the round's colour is the warning.
+- **Killing pays.** A hull you finished is worth `combat.pirate_bounty`,
+  `combat.localhoster_bounty` or `combat.bobber_bounty`, and the banner says so
+  (`10K bounty paid! Pirates destroyed.` / `Bobbers send their thanks! 5K bounty
+  paid.`). A pirate bounty comes from the game; a war-side bounty comes from the
+  faction that hates the hull you just killed — and if *that* payer already hates
+  you, the bounty is simply not offered. Kill a pirate while nobody else's gun
+  lands the final blow and you get nothing: only your own rounds pay.
+- **Immunity is immunity.** Landed, jumping, or inside
+  `tactical.launch_immunity_frames` of launching, rounds pass straight through
+  you (and keep flying — they are not consumed by your invulnerability). The
+  system's planet is likewise not a target: rounds fly through the disc.
+- **Dying ends the run.** Armour at 0 stops the ship, locks the controls, and
+  prints `Ship lost with all hands!`. Stage 13 turns that into the proper end
+  screen; for now the flag is raised and the flying stops.
 
 ## Configuration
 
@@ -318,9 +366,58 @@ Two gotchas for anyone retuning this block:
   being fatal at startup.
 - **The band is wider than the view.** The game view is 683x768 and a medium-band
   ship sits 900px out, so a fleet holding its band is visible on the minimap and
-  not on the screen. That is a Stage 11 problem (it arrives with the projectiles
-  that will be flying in from off-screen); shrinking `engage_range_fraction` is
-  the blunt version of the fix.
+  not on the screen. Stage 11 shipped with the traffic shooting from out there
+  rather than adding off-screen contact indicators: an incoming round appears at
+  the edge of the view and crosses it, and the direction it comes from is the
+  warning. Shrinking `engage_range_fraction` (or `player_ship.weapon_range`) is
+  the blunt version of bringing a fight on screen; `scripts/capture_stage11_combat.py`
+  narrows the range to 420px precisely so the whole engagement fits in one picture.
+
+### Combat: rounds, sparks, and bounties (`combat`)
+
+The `combat` block tunes the fight on top of one hull's stat sheet. A gun's own
+numbers (`weapon_power`, `weapon_fire_rate`, `weapon_range`) live in `player_ship`,
+and an NPC hull copies them; this block is what the *projectiles* and the payouts
+need:
+
+```json
+"combat": {
+  "projectile_speed_bonus": 8,
+  "projectile_diameter": 3,
+  "pirate_bounty": 10000,
+  "bobber_bounty": 5000,
+  "localhoster_bounty": 5000
+}
+```
+
+| Key | Easy | Medium | Hard | What it does |
+| --- | --- | --- | --- | --- |
+| `projectile_speed_bonus` | 10 | 8 | 6 | px/frame added along the shooter's heading, *on top of* the shooter's own velocity |
+| `projectile_diameter` | 3 | 3 | 3 | how wide a round is painted, in pixels |
+| `pirate_bounty` | 15000 | 10000 | 12000 | credits for a pirate hull the player finished |
+| `bobber_bounty` | 8000 | 5000 | 6000 | credits for a Bobber hull the player finished |
+| `localhoster_bounty` | 8000 | 5000 | 6000 | credits for a Localhoster hull the player finished |
+
+Four things worth knowing before retuning it:
+
+- **`projectile_diameter` is a diameter.** The spec fixes a round at 3px across and
+  pygame draws circles by radius, so the conversion (`diameter // 2`, floored at 1
+  so a round is never a single invisible pixel) happens in exactly one place:
+  `CombatRules.projectile_radius`. The key used to be named `projectile_radius`
+  while holding a diameter; that name is now rejected, along with every other
+  unknown key, at startup.
+- **The bounty keys are named for the victim, not the payer.** Killing a Bobber is
+  worth `bobber_bounty`, and the Localhosters are the ones who thank you for it.
+  Pricing the two war-sides separately therefore needs no second table.
+- **A speed bonus below a ship's top speed makes a round dodgeable.** A round's
+  real velocity is the shooter's velocity plus this bonus along the heading: at the
+  shipped medium values a forward round leaves at 5 + 8 = 13 px/frame and one
+  fired while backing away at 8 - 5 = 3 px/frame. `player_ship.weapon_range` is the
+  round's *travel budget*, not a radius, so a backward shot still flies its full
+  1200px — it just takes 400 frames to do it.
+- **Zero is a real value.** `"pirate_bounty": 0` means nobody pays and no banner is
+  printed (rather than a banner reading `0K bounty paid!`). A negative bounty, a
+  diameter below 1, or a negative speed bonus is a fatal config error at startup.
 
 ### Economy: contracts, upgrades, and port services
 
@@ -465,6 +562,37 @@ same command reproduces the same pictures byte for byte. It also narrows
 `player_ship.weapon_range` to 400 so the whole engagement fits inside the 683px
 view — on the shipped tuning the band is 900px and the fleet is only ever visible
 on the minimap.
+
+### Seeing the fight
+
+Nine tiles (`stage11_combat.png`), one system visit, one fight:
+
+![Stage 11: an unscanned system, the T lock on a pirate, a volley in flight, impact sparks, a hull coming apart, the bounty banner, the readout back to No target, a round through the planet, and nobody shooting in hyperspace](stage11_combat.png)
+
+Left to right, top to bottom: a fresh system whose readout says `No target` even
+though a pirate is sitting in view; `T` pressed, and the readout now carries the
+red word `Pirate` plus that hull's shield and armour bars in the same style as the
+player's own; the player's green rounds away from the ship and the traffic's
+ coloured ones toward it; sparks where a round first entered the pirate's hitbox
+(tinted with the firer's colour, sprayed at the entry point rather than at the
+hull's centre); the same hull gone, with a strictly bigger burst; the banner that
+is the only place a payout is ever stated, and the readout already back to
+`No target` because the scanned hull is what died; an empty system with one round
+flying straight through the planet's disc; and hyperspace, where the rounds in
+flight were cleared at the gate and nobody fires while the screen is white.
+
+```bash
+python scripts/capture_stage11_combat.py --sheet stage11_combat.png  # one sheet
+python scripts/capture_stage11_combat.py combat_frames               # individual frames
+```
+
+The fleet is hand-placed and both RNG streams are pinned, so the sheet is
+reproducible. The script also *props the player's hull up* — but on the live stat
+block, never in the config, because an NPC hull is rolled from the player's
+**starting** stats and a 1000-armour pirate would turn the capture into a standoff.
+The parked hulls run 50/100 defences, 12 damage, one round a second; the player's
+gun runs 75 damage at three a second, which is what makes the fight end inside
+nine tiles rather than at frame 4000.
 
 ## Tests
 

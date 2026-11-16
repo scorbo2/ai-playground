@@ -14,6 +14,7 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from src.map_systems.graph import NATO_SYSTEMS
+from src.model.combat import CombatRules
 from src.model.encounter import SpawnRules
 
 # Directory holding the main.py shim (the game root), resolved from this
@@ -203,11 +204,38 @@ class _UpgradeStepConfig(_ConfigModel):
 
 
 class _CombatConfig(_ConfigModel):
+    """Ballistics and kill rewards.
+
+    ``projectile_diameter`` is named for the diameter rather than a radius because
+    that is the measurement the spec fixes ("all projectiles are solid 3px
+    diameter circles"); the conversion to pygame's circle radius happens once, in
+    :attr:`src.model.combat.CombatRules.projectile_radius`. The old key name said
+    "radius" while every shipped value carried 3, which is what the spec's *3px*
+    value means — a key that misdescribes its own value is a bug that has not been
+    noticed yet, so it was renamed in the same change that first consumes it.
+    """
+
     projectile_speed_bonus: float
-    projectile_radius: int
+    projectile_diameter: int
     pirate_bounty: int
     bobber_bounty: int
     localhoster_bounty: int
+
+    @model_validator(mode="after")
+    def _check_combat_is_usable(self) -> "_CombatConfig":
+        """Reject a ``combat`` section the projectile code cannot run on.
+
+        The checks are duplicated on purpose — no. They are *delegated*, exactly
+        as the ``npc`` section delegates to :class:`SpawnRules`: the loader calls
+        the same :meth:`CombatRules.from_config` the scene calls at runtime, so a
+        config that loads is a config the fight runs on, by construction, and the
+        model cannot quietly relax a rule the loader enforced.
+        """
+        try:
+            CombatRules.from_config(self.model_dump())
+        except ValueError as exc:
+            raise ValueError(f"combat section is unusable: {exc}") from exc
+        return self
 
 
 class _NpcConfig(_ConfigModel):
@@ -457,7 +485,7 @@ def base_config() -> dict:
         },
         "combat": {
             "projectile_speed_bonus": 8,
-            "projectile_radius": 3,
+            "projectile_diameter": 3,
             "pirate_bounty": 10000,
             "bobber_bounty": 5000,
             "localhoster_bounty": 5000,

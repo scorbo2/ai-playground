@@ -57,7 +57,7 @@
   },
   "combat": {
     "projectile_speed_bonus": 8,
-    "projectile_radius": 3,
+    "projectile_diameter": 3,
     "pirate_bounty": 10000,
     "bobber_bounty": 5000,
     "localhoster_bounty": 5000

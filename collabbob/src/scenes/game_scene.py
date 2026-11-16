@@ -36,9 +36,10 @@ from src.map_systems.graph import GraphGenerationError, SystemGraphGenerator
 from src.map_systems.layout import build_map_layout
 from src.map_systems.system_map import SystemMapState
 from src.main_loop import SCREEN_SIZE
+from src.model.combat import CombatRules, Combatant, Gunfight, bounty_for_kill
 from src.model.economy import PortVisit, generate_port_offers, port_rng
 from src.model.encounter import Encounter, SpawnRules, encounter_rng, roll_encounter
-from src.model.factions import PlayerRelations
+from src.model.factions import PlayerRelations, combatant_color, is_npc_faction
 from src.model.game_state import PLANET_WORLD_POSITION, GameState
 from src.model.jump import (
     BLOCKED_EXACT_FUEL,
@@ -49,6 +50,7 @@ from src.model.jump import (
     JumpParams,
 )
 from src.model.lore import LoreBook
+from src.model.scan import ShipScanner
 from src.model.weapons import Shot
 from src.scene_manager import Scene
 from src.scenes.map_view import MapView
@@ -60,6 +62,16 @@ if TYPE_CHECKING:
 
 # "briefly overlay an 'insufficient fuel' message" — two seconds, no more.
 JUMP_DENIED_MESSAGE_FRAMES = 120
+
+# How long a bounty (or a kill-reward refusal) stays on the tactical display. The
+# spec says "briefly"; three seconds matches the boundary warning and is long
+# enough to read while still flying.
+BOUNTY_MESSAGE_FRAMES = 180
+
+# The banner shown the frame the hull comes apart. Stage 13 owns the end *screen*;
+# this is only the tactical display saying something happened rather than the game
+# appearing to shrug and carry on.
+PLAYER_LOST_MESSAGE = "Ship lost with all hands!"
 
 
 def _gameplay_rng(config: dict) -> "_random_lib.Random | None":
@@ -134,6 +146,12 @@ class GameScene(Scene):
         # a faction shot at in Alpha is still shooting in Zulu, and a new game
         # starts neutral because it builds a new GameScene.
         self.relations = PlayerRelations()
+        # Stage 11's three pieces of fight state, all per-game and all cheap:
+        # the combat tunables, the rounds currently in the *current* visit, and
+        # whichever hull the HUD's nearest-ship readout is locked on.
+        self.combat_rules = self._build_combat_rules(config)
+        self.gunfight = Gunfight(self.combat_rules)
+        self.scanner = ShipScanner()
         # Declared here so a reader of __init__ sees the two per-visit world
         # objects a GameScene always has; both are filled by _enter_system.
         self.port_visit: PortVisit
@@ -177,6 +195,20 @@ class GameScene(Scene):
             return SpawnRules.from_config(config["npc"])
         except (KeyError, TypeError, ValueError) as exc:
             print(f"error: cannot build NPC spawn rules from config: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
+
+    def _build_combat_rules(self, config: dict) -> CombatRules:
+        """Hoist the ``combat`` section into the rules the projectile code runs on.
+
+        Same deal as :meth:`_build_spawn_rules`: a hand-built config (tooling, a
+        future save file) should fail the way a config failure fails everywhere
+        else in this game — stderr and exit — rather than as a KeyError the first
+        time the player taps the space bar.
+        """
+        try:
+            return CombatRules.from_config(config["combat"])
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"error: cannot build combat rules from config: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
 
     # ------------------------------------------------------------------
@@ -237,14 +269,25 @@ class GameScene(Scene):
         self.tactical.handle_event(event)
 
     def update(self) -> Tuple[Action, ...]:
-        """Advance the simulation, drive the jump, return this frame's actions.
+        """Advance the simulation, drive the jump, fly the shots, return the actions.
 
         ``open_map`` (pressing M) raises the system-map modal, unless a jump is
         animating — the spec blocks the map during a jump. ``jump`` (pressing J)
-        runs the eligibility rules. Returning the actions keeps this scene's
-        reaction to discrete input testable without driving the whole stack.
+        runs the eligibility rules. ``fire`` (holding space) asks the ship's gun
+        for a shot, and ``scan`` (pressing T) moves the HUD's nearest-ship lock.
+        Returning the actions keeps this scene's reaction to discrete input
+        testable without driving the whole stack.
+
+        The order of the halves below is the frame's causality, not a style
+        choice: input is drained and the ship moves, then the jump advances (which
+        may end this visit and its fight), then the fleet acts, then every shot
+        anyone produced this frame crosses the system and is resolved. Firing is
+        resolved *after* the jump check so a shot pulled on the same frame a jump
+        starts is simply gone with the rest of the visit — the alternative is a
+        round that outlives the universe it was fired in.
         """
         actions = self.tactical.update()
+        shots: "list[Shot]" = []
         for action in actions:
             if action.kind == "open_map":
                 self._open_system_map()
@@ -252,9 +295,16 @@ class GameScene(Scene):
                 self._request_jump()
             elif action.kind == "land":
                 self._open_spaceport()
+            elif action.kind == "scan":
+                self.scanner.scan(self.encounter.ships, self.game_state.position)
+            elif action.kind == "fire":
+                shot = self.game_state.try_fire()
+                if shot is not None:
+                    shots.append(shot)
         self._close_port_modal()
         self._advance_jump()
         self._advance_encounter()
+        self._advance_gunfight(shots)
         self._sync_jump_presentation()
         return tuple(actions)
 
@@ -283,6 +333,11 @@ class GameScene(Scene):
         differently (see :func:`port_rng` and :func:`encounter_rng`), so entering
         Bravo deals a Bravo market and a Bravo fleet reproducibly without either
         one consuming the other's random draws.
+
+        Stage 11's fight state is dealt at the same boundary for the same reason
+        it is *dropped* there: rounds in flight belong to the visit that fired
+        them, and the nearest-ship lock belongs to a system the player is no
+        longer in (spec: the readout always starts a new system at "No target").
         """
         serial = self.game_state.begin_port_visit()
         self.port_visit = generate_port_offers(
@@ -306,6 +361,8 @@ class GameScene(Scene):
             rng=encounter_rng(self.session_seed, system, serial),
             relations=self.relations,
         )
+        self.gunfight.clear()
+        self.scanner.clear()
 
     def _advance_encounter(self) -> None:
         """Run the current system's fleet for one frame; keep the shots it fired.
@@ -324,6 +381,121 @@ class GameScene(Scene):
             self.pending_shots = []
             return
         self.pending_shots = self.encounter.advance_frame(self.game_state.position)
+
+    # ------------------------------------------------------------------
+    # Combat (Stage 11)
+    # ------------------------------------------------------------------
+    def _advance_gunfight(self, player_shots: "list[Shot]") -> None:
+        """Fly every round in the system, then deal with whatever it landed on.
+
+        Two halves, in this order:
+
+        1. The rounds already in flight move and are resolved against the bodies
+           standing where the frame *opened* — the same snapshot discipline the
+           fleet's AI uses, so a hit cannot depend on whether some other ship's
+           physics happened to run earlier in the frame.
+        2. This frame's shots are launched *after* that, which is what stops a
+           round from registering a point-blank hit on the frame it is born — a
+           muzzle flare inside someone's cockpit is not yet a hit.
+
+        Skipped during hyperspace, and cleared outright: the visit ends at the
+        gate, and a projectile that followed the player through it would be a
+        killer from a universe nobody is standing in.
+        """
+        if self.jumps.is_active:
+            self.gunfight.clear()
+            return
+
+        impacts = self.gunfight.advance_frame(self._battlefield())
+        self._resolve_impacts(impacts)
+        self.gunfight.launch_all(list(self.pending_shots) + player_shots)
+
+    def _battlefield(self) -> "list[Combatant]":
+        """Every body a round could hit this frame: the player plus the fleet.
+
+        A destroyed player is left off entirely — resolving hits against a wreck
+        produces impacts, bounties, and particle effects for a run that Stage 13
+        is about to end. Wrecked NPC hulls are already gone from the fleet (see
+        :meth:`~src.model.encounter.Encounter.prune_destroyed`).
+        """
+        bodies: "list[Combatant]" = []
+        if not self.game_state.destroyed:
+            bodies.append(Combatant.from_player(self.game_state))
+        bodies.extend(Combatant.from_ship(ship) for ship in self.encounter.ships)
+        return bodies
+
+    def _resolve_impacts(self, impacts: "list") -> None:
+        """Turn the model's :class:`~src.model.combat.Impact` events into game state.
+
+        Three consequences per hit, all of them the spec's and none of them the
+        projectile code's business:
+
+        * **Sparks.** Small spray for a hit, big one for a hull coming apart.
+          Tinted with the *firer's* colour, so a player round reads green even in
+          a screenful of red pirate fire.
+        * **Grudges.** A player round that lands on a Localhoster or a Bobber
+          makes that faction hostile for the rest of the game — on the *impact*,
+          not on the kill: a shield that soaked the hit changes the galaxy just as
+          much as a hull that didn't survive it.
+        * **Bounties**, and only for a hull the player's own gun finished.
+
+        Grudges are recorded before bounties on purpose. The bounty a war-side
+        pays depends on that *payer's* relations, and a hit can only make the
+        *victim's* faction hostile, so the two never actually interfere — but the
+        order that cannot interfere is the one worth writing down.
+        """
+        for impact in impacts:
+            tint = combatant_color(impact.faction)
+            if impact.destroyed:
+                self.tactical.show_destruction(impact.position, tint)
+            else:
+                self.tactical.show_impact(impact.position, tint)
+
+            if impact.fired_by_player and is_npc_faction(impact.target_faction):
+                self.relations.declare_hostile_to_player(impact.target_faction)
+            if impact.destroyed:
+                self._award_bounty(impact)
+
+        # Deaths are pruned here rather than in the projectile code: the fleet, the
+        # minimap, the scan lock, and the bounty above all ask the same question
+        # ("is that hull still flying?") and get one answer if the fleet is edited
+        # once, in one place, at the end of the frame that killed it.
+        self.encounter.prune_destroyed()
+        self.scanner.refresh()
+        self._note_player_destruction()
+
+    def _award_bounty(self, impact) -> None:
+        """Pay and announce the bounty for one hull the player finished.
+
+        The rule lives in :func:`src.model.combat.bounty_for_kill`; this is the
+        half that touches the wallet and the screen, which is a scene's job. No
+        bounty is silent, and no bounty is payable for a kill somebody else's gun
+        finished, or for one the war-side that would pay already hates the player
+        for (see the Stage 11 notes in DECISIONS.md).
+        """
+        if not impact.fired_by_player or not is_npc_faction(impact.target_faction):
+            return
+        bounty = bounty_for_kill(impact.target_faction, self.combat_rules, self.relations)
+        if bounty is None:
+            return
+        self.game_state.add_credits(bounty.credits)
+        self.tactical.show_message(bounty.message, BOUNTY_MESSAGE_FRAMES)
+
+    def _note_player_destruction(self) -> None:
+        """Flag the run as over the frame the hull comes apart, and stop flying.
+
+        Stage 13 owns the end screen (and the other ways to lose), so this stage
+        raises the flag rather than the screen. What it *does* do is lock the
+        controls: a wreck that can still steer and shoot is a bug the player can
+        keep playing in, and the difference between "dead" and "dead but still
+        flying" is the sort of thing a Stage 13 gate has to be able to assert.
+        """
+        if not self.game_state.destroyed:
+            return
+        if not self.pending_game_over:
+            self.tactical.input.lock_input()
+            self.tactical.show_message(PLAYER_LOST_MESSAGE, BOUNTY_MESSAGE_FRAMES)
+        self.pending_game_over = True
 
     def _close_port_modal(self) -> None:
         """Notice that the player launched: the modal is gone, the market is not.
@@ -438,6 +610,14 @@ class GameScene(Scene):
         # behind a hull.
         self.tactical.encounter = self.encounter
         self.hud.contacts = self.encounter.ships
+        # The same draw-time argument applies to Stage 11's two additions: the
+        # rounds in flight are published so the view paints exactly the shots the
+        # simulation is holding (not a stale tuple), and the nearest-ship readout
+        # reads the scanner's lock rather than picking a ship itself — a HUD that
+        # re-derives "which ship am I looking at" is a second scanner, and it will
+        # eventually disagree with the first (spec: the display is *sticky*).
+        self.tactical.projectiles = self.gunfight.projectiles
+        self.hud.nearest_ship = self.scanner.displayed
         self.tactical.draw(surface)
         self.hud.draw(surface)
         self.screen_flash.draw(surface)

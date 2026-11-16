@@ -1,9 +1,16 @@
-"""Hyperspace presentation: the streaks, the white-out, the shockwave (Stage 8).
+"""Hyperspace presentation, and the sparks a gunfight throws (Stages 8 and 11).
 
 The spec asks for an acceleration animation and stops there. This module is the
 "and then it gets *dramatic*" part: three effects that turn a straight-line
 speed-up into something that feels like leaving reality, and one of them (the
 white-out) exists because it hides the world swap.
+
+The second half of the module is Stage 11's half: particle bursts for projectile
+impacts and ship destructions, plus the manager that keeps every live burst in
+one place. Those are **world-anchored** (a spark cloud stays where the hit
+happened as the camera slides past it), where the warp tunnel is view-anchored
+(the vanishing point is the ship, by definition). That difference is the whole
+reason the two draw calls take different arguments.
 
 Everything time-related here is derived from a frame index and a total, not from
 wall-clock time, so the animation is frame-exact and testable under the fixed
@@ -17,11 +24,13 @@ from __future__ import annotations
 import math
 import random as _random_lib
 from dataclasses import dataclass
-from typing import List
+from typing import List, Sequence, Tuple
 
 import pygame
 
+from src.camera import world_to_screen
 from src.model.jump import blind_frames_for
+from src.model.physics import Vec2, unit_from_heading_degrees
 
 # Frames the flash sits at full opacity before it starts decaying. Two is long
 # enough to cover the world swap, short enough that it does not read as a
@@ -274,3 +283,237 @@ class WarpTunnel:
             start = (cx + cos * streak.previous_radius, cy + sin * streak.previous_radius)
             end = (cx + cos * streak.radius, cy + sin * streak.radius)
             pygame.draw.line(surface, color, start, end, 1 + int(reach * 2))
+
+
+# ---------------------------------------------------------------------------
+# Gunfire: the sparks (Stage 11)
+# ---------------------------------------------------------------------------
+
+# The spec asks for "colorful particle effects" on every projectile impact and
+# "larger particle effects" on a destruction. Larger turns all four dials at
+# once — more sparks, faster, longer-lived, a pixel thicker — because raising
+# only the count of the same tiny dots still reads as the same event.
+_IMPACT_PARTICLES = 12
+_IMPACT_SPEED = 2.6          # px/frame of initial spread
+_IMPACT_LIFETIME_FRAMES = 22
+# A radius-1 spark is a 3px smudge that vanishes against the starfield at a
+# distance; a hit has to be *seen* to warn the player that something is shooting at
+# them. "Bigger" is carried by particle count and spread, not by dot size.
+_IMPACT_RADIUS = 2
+
+_DESTRUCTION_PARTICLES = 40
+_DESTRUCTION_SPEED = 6.0
+_DESTRUCTION_LIFETIME_FRAMES = 48
+_DESTRUCTION_RADIUS = 2
+
+# Deliberately not the faction palette. Sparks are hot metal and plasma; reusing
+# faction colours would make a pirate's death indistinguishable from a pirate's
+# shot, and the *tint* argument is what carries "who hit whom".
+_SPARK_PALETTE: Tuple[Tuple[int, int, int], ...] = (
+    (255, 236, 170),
+    (255, 176, 84),
+    (255, 96, 64),
+    (168, 236, 255),
+    (196, 255, 190),
+    (226, 178, 255),
+)
+
+_WHITE_HOT: Tuple[int, int, int] = (255, 255, 255)
+
+
+def _blend(
+    first: Tuple[int, int, int], second: Tuple[int, int, int], fraction: float
+) -> Tuple[int, int, int]:
+    """Linear blend between two colours (``fraction`` 0 -> first, 1 -> second)."""
+    fraction = max(0.0, min(1.0, float(fraction)))
+    return tuple(
+        int(round(a + (b - a) * fraction)) for a, b in zip(first, second)
+    )  # type: ignore[return-value]
+
+
+@dataclass
+class _Particle:
+    """One spark: a world position, a velocity, a colour, and a frame budget."""
+
+    position: Vec2
+    velocity: Vec2
+    color: Tuple[int, int, int]
+    frames_left: int
+    total_frames: int
+
+    def advance(self) -> bool:
+        """Move one fixed timestep; False when this spark is done."""
+        x, y = self.position
+        self.position = (x + self.velocity[0], y + self.velocity[1])
+        self.frames_left -= 1
+        return self.frames_left > 0
+
+    @property
+    def life_fraction(self) -> float:
+        """1 on the frame it is born, 0 the frame it dies."""
+        if self.total_frames <= 0:
+            return 0.0
+        return max(0.0, self.frames_left / float(self.total_frames))
+
+
+class ParticleBurst:
+    """One spray of world-anchored sparks from one event, at one world point.
+
+    A burst is inert once thrown: it does not track the ship that was hit, and it
+    does not care whether that ship still exists. Sparks keep their velocity for
+    their whole life — this is a universe with no drag, and a spark cloud that
+    politely decelerated would be the one place the physics visibly lies.
+    """
+
+    def __init__(
+        self,
+        position: Vec2,
+        *,
+        count: int,
+        speed: float,
+        lifetime_frames: int,
+        radius: int,
+        rng: "_random_lib.Random",
+        tint: Tuple[int, int, int] = _WHITE_HOT,
+    ) -> None:
+        self.origin: Vec2 = (float(position[0]), float(position[1]))
+        self.radius = max(1, int(radius))
+        self.tint = tint
+        self._particles = [
+            self._new_particle(speed, lifetime_frames, rng) for _ in range(max(1, int(count)))
+        ]
+
+    def _new_particle(
+        self, speed: float, lifetime_frames: int, rng: "_random_lib.Random"
+    ) -> _Particle:
+        heading = rng.uniform(0.0, 360.0)
+        # A spread of speeds rather than one: every spark at the same speed draws
+        # a perfect expanding ring, which looks manufactured rather than exploded.
+        pace = speed * rng.uniform(0.35, 1.0)
+        unit_x, unit_y = unit_from_heading_degrees(heading)
+        # A spread of lifetimes too, so the burst frays instead of vanishing on
+        # one frame.
+        life = max(1, int(lifetime_frames * rng.uniform(0.55, 1.0)))
+        return _Particle(
+            position=self.origin,
+            velocity=(unit_x * pace, unit_y * pace),
+            color=rng.choice(_SPARK_PALETTE),
+            frames_left=life,
+            total_frames=life,
+        )
+
+    @property
+    def particles(self) -> "tuple[_Particle, ...]":
+        return tuple(self._particles)
+
+    @property
+    def alive(self) -> bool:
+        """Whether any spark is still burning."""
+        return bool(self._particles)
+
+    def advance(self) -> bool:
+        """One frame for every spark; True while the burst is still visible."""
+        self._particles = [particle for particle in self._particles if particle.advance()]
+        return self.alive
+
+    def color_for(self, particle: _Particle) -> Tuple[int, int, int]:
+        """A spark's colour on this frame: born white-hot, dies in its own hue.
+
+        The tint is mixed in at the very end of a spark's life so the burst
+        carries a fingerprint of *who* landed the hit (the caller passes the
+        firer's colour) without every particle being a flat faction swatch.
+        """
+        life = particle.life_fraction
+        if life > 0.75:
+            return _blend(particle.color, _WHITE_HOT, (life - 0.75) * 4.0)
+        if life < 0.3:
+            return _blend(particle.color, self.tint, 1.0 - (life / 0.3))
+        return particle.color
+
+    def draw(self, surface: "pygame.Surface", camera: Vec2, view_center: Vec2) -> None:
+        """Draw every spark at its world position, through the shipping camera."""
+        for particle in self._particles:
+            screen_x, screen_y = world_to_screen(
+                particle.position[0], particle.position[1], camera, view_center
+            )
+            radius = self.radius if particle.life_fraction > 0.5 else max(1, self.radius - 1)
+            pygame.draw.circle(
+                surface,
+                self.color_for(particle),
+                (int(round(screen_x)), int(round(screen_y))),
+                radius,
+            )
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"ParticleBurst(sparks={len(self._particles)})"
+
+
+class ImpactEffects:
+    """Every live burst in the current system visit.
+
+    Owned by the tactical view (it is presentation state, like the starfield and
+    the warp tunnel) but *fed* by the scene, because "something got hit at these
+    world coordinates" is a model event and "make it pretty here" is not the
+    model's business. Bursts are cleared when the visit ends: wreckage does not
+    follow the player through a hyperspace gate, and a burst drawn in the wrong
+    system is a coordinate bug the player would see as a ghost.
+    """
+
+    def __init__(self, rng: "_random_lib.Random | None" = None) -> None:
+        self.rng = rng or _random_lib.Random()
+        self._bursts: List[ParticleBurst] = []
+
+    def spawn_impact(
+        self, position: Vec2, tint: Tuple[int, int, int] = _WHITE_HOT
+    ) -> ParticleBurst:
+        """A projectile landed somewhere: the small, sharp spray."""
+        return self._spawn(
+            position,
+            count=_IMPACT_PARTICLES,
+            speed=_IMPACT_SPEED,
+            lifetime_frames=_IMPACT_LIFETIME_FRAMES,
+            radius=_IMPACT_RADIUS,
+            tint=tint,
+        )
+
+    def spawn_destruction(
+        self, position: Vec2, tint: Tuple[int, int, int] = _WHITE_HOT
+    ) -> ParticleBurst:
+        """A hull came apart: the big one."""
+        return self._spawn(
+            position,
+            count=_DESTRUCTION_PARTICLES,
+            speed=_DESTRUCTION_SPEED,
+            lifetime_frames=_DESTRUCTION_LIFETIME_FRAMES,
+            radius=_DESTRUCTION_RADIUS,
+            tint=tint,
+        )
+
+    def _spawn(self, position, **kwargs) -> ParticleBurst:
+        burst = ParticleBurst(position, rng=self.rng, **kwargs)
+        self._bursts.append(burst)
+        return burst
+
+    def advance(self) -> None:
+        """One frame for every live burst; dead bursts are dropped here."""
+        self._bursts = [burst for burst in self._bursts if burst.advance()]
+
+    def clear(self) -> None:
+        """Forget every burst (new system, new game, hyperspace if you like)."""
+        self._bursts.clear()
+
+    @property
+    def bursts(self) -> "tuple[ParticleBurst, ...]":
+        return tuple(self._bursts)
+
+    @property
+    def is_empty(self) -> bool:
+        return not self._bursts
+
+    def draw(self, surface: "pygame.Surface", camera: Vec2, view_center: Vec2) -> None:
+        """Draw every live burst, oldest first (newest sparks land on top)."""
+        for burst in self._bursts:
+            burst.draw(surface, camera, view_center)
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"ImpactEffects(bursts={len(self._bursts)})"

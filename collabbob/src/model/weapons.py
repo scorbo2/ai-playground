@@ -1,6 +1,6 @@
 """Weapon timing and the record of a shot being fired (Stage 10).
 
-Two pieces of vocabulary that both the NPC AI (Stage 10) and the projectile
+Three pieces of vocabulary that both the NPC AI (Stage 10) and the projectile
 simulation (Stage 11) need, kept in one place so neither side invents its own:
 
 * :func:`weapon_cooldown_frames` — how long a weapon takes to cycle, given a
@@ -10,13 +10,18 @@ simulation (Stage 11) need, kept in one place so neither side invents its own:
   10 produces shots (the AI owns *when* and *where* a gun fires); Stage 11 turns
   them into travelling projectiles and applies the damage. Keeping the request
   as a value object means the AI never has to know that projectiles exist.
+* :class:`WeaponClock` — the fire-rate gate itself, so the player's gun and an
+  NPC's gun cannot disagree about what ``weapon_fire_rate`` means, and no hull
+  ends up owning two cooldown clocks.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from typing import Optional
 
-from src.model.factions import require_faction
+from src.model.factions import require_combatant
 from src.model.physics import Vec2, normalise
 
 # Frames in the game's fixed timestep. The spec's fire rates are "per second
@@ -54,6 +59,13 @@ class Shot:
     ``owner`` is the ship that fired. Stage 11 needs it for two rules that cannot
     be evaluated without an identity: a projectile passes harmlessly through its
     own ship, and only *player* projectiles earn a bounty.
+
+    ``faction`` is really a **combatant** id: one of the three NPC factions, or
+    :data:`~src.model.factions.FACTION_PLAYER` when the shot came from the
+    player's own trigger. The name is kept because every NPC shot's faction *is*
+    its owner's faction (``shot.faction == shot.owner.faction``), and the one
+    exception is spelled out here rather than renamed into a second field that
+    could disagree with the first.
     """
 
     faction: str
@@ -65,7 +77,7 @@ class Shot:
     weapon_range: float
 
     def __post_init__(self) -> None:
-        require_faction(self.faction)
+        require_combatant(self.faction)
         object.__setattr__(self, "direction", normalise(self.direction))
 
     def muzzle_velocity(self, projectile_speed_bonus: float) -> Vec2:
@@ -104,3 +116,52 @@ def aim_is_within(actual: Vec2, intended: Vec2, tolerance_degrees: float) -> boo
         return True
     dot = max(-1.0, min(1.0, first[0] * second[0] + first[1] * second[1]))
     return math.degrees(math.acos(dot)) <= tolerance_degrees + 1e-9
+
+
+@dataclass
+class WeaponClock:
+    """The countdown one gun keeps between shots (Stage 11).
+
+    Stage 10 put this clock inside :class:`~src.model.npc_ship.NpcShip`. Stage 11
+    gives the player a gun, and a second implementation of "is it ready yet?" is
+    how one difficulty ends up with two fire rates. One clock, two hulls: the NPC
+    gun and the player's, both ticking on the same fixed timestep.
+
+    Deliberately *not* given the weapon's power, range or rate. The player's stats
+    are mutated by spaceport upgrades, so a clock holding a copy of any of them
+    would be a stale snapshot of a number that is still changing — the cycle length
+    is handed over at the moment of firing, from whichever stat block is live.
+    """
+
+    frames_until_ready: float = 0.0
+
+    @property
+    def ready(self) -> bool:
+        """Whether the gun may speak this frame."""
+        return self.frames_until_ready <= 0.0
+
+    def advance_frame(self) -> None:
+        """Consume one fixed timestep."""
+        self.frames_until_ready = max(0.0, self.frames_until_ready - 1.0)
+
+    def pull(self, cooldown_frames: float) -> bool:
+        """Whether the trigger may be pulled now; pulling it starts the next cycle.
+
+        A gun that is still cycling answers ``False`` and changes nothing, which
+        is the spec's "pressing space while the weapon is reloading does nothing"
+        — silence, not a queued shot and not a message. Holding the trigger is
+        therefore the correct way to shoot: the rate this clock enforces is what
+        turns a held key into exactly ``fire_rate`` shots per second.
+
+        ``cooldown_frames`` of infinity (a non-positive fire rate) means the gun is
+        disabled, and a disabled gun has no free first shot hiding in it: it answers
+        ``False`` and stays that way, which is what lets the AI check readiness
+        rather than crash on a bad config value.
+        """
+        if not math.isfinite(cooldown_frames):
+            self.frames_until_ready = cooldown_frames
+            return False
+        if not self.ready:
+            return False
+        self.frames_until_ready = float(cooldown_frames)
+        return True

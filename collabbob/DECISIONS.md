@@ -1116,3 +1116,223 @@ loophole with a docstring. Superseded below.)
   engagement fits in the view — see the visibility note above. Hand-placed rather
   than rolled on purpose: if the fleet were rolled, every future change to the
   spawn rules would change the pictures, which is the opposite of a visual diff.
+
+## Stage 11 — Combat and the `T` scan
+
+- **Two new model modules, and the one thing each owns.** `src/model/combat.py`
+  is the fight: `CombatRules` (the validated `combat` config section), `Projectile`
+  (one round in flight, in world coordinates), `Combatant` (a body a round may
+  hit), `Impact` (what happened when one met the other), `Bounty`,
+  `bounty_for_kill`, the swept hit test, and `Gunfight` (the round list and the
+  per-frame resolution). `src/model/scan.py` is `ShipScanner`, the sticky lock
+  behind `T`. Neither imports pygame; neither knows the scene exists. `Gunfight`
+  is fed its targets every frame rather than holding references to them, because
+  the fleet's lifetime is not its business: a `Gunfight` that owned ship objects
+  would keep a wreck alive out of spite, and a scene that forgets to update the
+  list gets a stale battlefield instead of a type error.
+
+- **The player is a combatant, never a faction.** `factions.py` grows
+  `FACTION_PLAYER` plus `COMBATANTS`, `require_combatant`, `combatant_color` and
+  `is_npc_faction`, and `FACTIONS`/the hostility matrix stay exactly as Stage 10
+  defined them. The distinction is load-bearing: the matrix answers "does this
+  faction shoot that faction", and the player's relations are a separate mutable
+  thing (`PlayerRelations`). Letting `"player"` into the matrix would let code ask
+  a question the table cannot answer and get `False` — silence where the answer
+  should be an error. `Shot.faction` therefore *may* hold `FACTION_PLAYER` (the
+  field name is kept from Stage 10 rather than adding a second "who fired" field:
+  two provenance fields, one of which is always empty, is how the wrong one gets
+  read).
+
+- **`combat.projectile_radius` → `combat.projectile_diameter`, in the same change
+  as the code that reads it.** The spec fixes a round at "3px diameter" and pygame
+  draws circles by radius. The key now names the value's meaning, and the
+  conversion (`diameter // 2`, floored at 1 so a round is never a single invisible
+  pixel) happens in exactly one place: `CombatRules.projectile_radius`. All three
+  shipped configs were renamed in the same edit, and the old key is fatal at
+  startup (`extra = "forbid"`), pinned by
+  `testloadConfig_withTheRetiredProjectileRadiusKey_shouldFailAsAnUnknownKey` — a
+  half-renamed
+  config that silently keeps the old key is the boring way for the shipped
+  difficulties to stop matching each other. No other keys were added: the `combat`
+  section already existed, so the fixtures needed no new defaults.
+
+- **One fire-rate clock, and the cycle length handed in at the trigger.** Stage 10
+  kept a cooldown inside `NpcShip`; Stage 11 gives the player a gun, so
+  `weapons.WeaponClock` is now the single implementation and both hulls use it. It
+  counts *frames* and takes the cycle length as an argument to `pull()`, rather
+  than storing a fire rate. Writing the upgrade test is what exposed the mistake:
+  a clock that memorises `weapon_fire_rate` at construction keeps the boot-time
+  rate for the whole run, so a bought upgrade changes the shot's power and range
+  but not its rate — the same staleness the `Shot` already avoids by carrying live
+  stats. `GameState.gun_cooldown_frames` reads the live stat block, and
+  `NpcShip.weapon_ready` now reports `False` for an infinite cycle so readiness and
+  firing cannot disagree. A disabled gun also gets no free first shot: a clock born
+  ready with a zero fire rate fires exactly once, which is a bug that only appears
+  in a config somebody edited by hand.
+
+- **`apply_damage_order` lives in `stats.py`, and does not clamp.** Shield-first
+  is one rule with two callers (an NPC hull and the player's hull); two
+  implementations is how a game ends up where the player and the NPCs are playing
+  different games. It returns `(shields, armor)` and refuses to floor armour at 0:
+  overkill is information the caller may want (a destruction banner, a later
+  "how badly did I win that fight" readout), and a helper that quietly discards
+  the excess is a helper the caller cannot trust with arithmetic.
+
+- **Hit detection is swept, and that is not an optimisation.** A round on the
+  shipped medium tuning moves 13px/frame from a hull whose hitbox is 20px in
+  radius; a fast ship (or a fast round) steps clean over a target between two
+  frames, so a point-in-circle test reports a miss the player can *watch* happen.
+  `segment_entry_parameter` solves the segment/circle intersection and returns the
+  earliest `t` in [0,1]; `Gunfight` picks the *smallest* `t` among the bodies it
+  may hit, so when one sweep crosses two hulls the one entered first takes the hit
+  regardless of the order the target list was built in — the same spawn-order
+  class of bug Stage 10 pinned for the AI's target choice. Consequences that are
+  now pinned by tests: a round damages at most one hull (no perforating a
+  formation); a round that expires and lands on the same frame counts as a hit
+  (resolving the hit first is what makes `weapon_range` the honest number rather
+  than one pixel short of it); the `Impact.position` is the entry point, which is
+  where the sparks go. Documented edge case: a round *born inside* a hull (hulls
+  overlap; there is no hull-on-hull collision in this game) has entry `t = 0` and
+  hits at the muzzle point — "you were inside me, therefore my gun does nothing"
+  is the worse of the two rules.
+
+- **`_advance_gunfight` moves the old rounds before launching the new ones.** The
+  frames already in flight are resolved against the bodies standing where the frame
+  *opened* (the same snapshot discipline the fleet's AI uses), and this frame's
+  shots are launched afterwards. Otherwise a ship sitting inside another ship's
+  hitbox scores a point-blank hit on the frame its round was born, and a muzzle
+  flare is not yet a hit.
+
+- **A hit is a diplomatic incident; a collision is not.** A player round that
+  lands on a Localhoster or a Bobber declares hostility for the rest of the game —
+  on the *impact*, not on the kill, because a shield that soaked the hit changes
+  the galaxy just as much as a hull that did not survive it, and only the *victim's*
+  faction takes the grudge. A stray NPC round from a faction at peace with the
+  player damages the player and does **not** flip relations: the player did nothing
+  to anyone. That asymmetry is why the round's colour matters at all, and it is the
+  only cue the player gets — hence projectiles, sparks, hulls and minimap markers
+  all take their colour from `combatant_color`. Grudges are recorded *before*
+  bounties are computed. They cannot actually interfere (a hit makes the victim
+  hostile; the bounty depends on the *payer's* relations, and the payer is the
+  victim's enemy), but the order that cannot interfere is the order worth writing
+  down.
+
+- **Bounties are keyed to the victim and paid by the victim's enemy.**
+  `combat.pirate_bounty` / `bobber_bounty` / `localhoster_bounty` name the hull
+  that died, which lets a config price the two war-sides separately without a
+  second table; `war_side_of(victim)` decides who thanks the player, and the
+  bounty is simply not offered when that payer already hates them ("make enemies of
+  both war-sides and neither pays"). A pirate bounty comes from the game and has no
+  relations check, because pirates have no rival to send their regards. A zero
+  bounty is silent rather than announcing `0K bounty paid!`. `Impact.fired_by_player`
+  is identity-based (`shot.owner is game_state`) and settled upstream, so the
+  spec's "no reward when another ship's projectile lands the final blow" is a fact
+  about who fired rather than a guess from who was nearby.
+
+- **Scan lock is scene state; the HUD is a painter.** `GameScene.scanner` owns the
+  lock and `GameScene.draw()` publishes `scanner.displayed` to
+  `HudView.nearest_ship`. A HUD that picked "the nearest ship" itself would be a
+  second scanner, and the two would disagree the first time a pirate flew past the
+  hull the player was watching. Per frame, `refresh()` drops the lock *only* if the
+  displayed hull was destroyed — the spec's revert to `No target` is not
+  conditioned on another `T` press. `_enter_system` calls `clear()`, which closes
+  the Stage 10 note about locks surviving a jump. `scan()` (a `T` press) re-locks on
+  the current nearest: the stickiness the spec asks for is about the frames between
+  presses, and a `T` that did nothing would leave the player staring at a pirate
+  who fled across the system.
+
+- **Deaths are pruned once, in one place.** `Encounter.prune_destroyed()` runs at
+  the end of `_resolve_impacts`, before the scan refresh and the bounty check, so
+  the fleet, the minimap, the readout and the payout all ask "is that hull still
+  flying?" of one answer. `nearest_living_ship` was lifted out of
+  `Encounter.nearest_ship_to` and is shared with `ShipScanner`, so "nearest" cannot
+  mean "nearest, wrecks included" in one module and the opposite in another.
+
+- **The planet is not a target, at all.** `_battlefield()` returns the player plus
+  the fleet and nothing else. A `Combatant` standing in for the planet with an
+  `immune` flag would need that flag to be honoured by every future code path; the
+  absence of the object is the rule, and
+  `testscene_aRoundCrossingThePlanetShouldPassStraightThrough` fires a round
+  through the disc to keep it that way. Landing, launch immunity, jumping and
+  destruction use a *live* `immune` flag on `Combatant` instead — those are states
+  of a body that is present.
+
+- **Dying stops the run, and stops the ship.** The frame armour reaches 0,
+  `GameScene._note_player_destruction` locks input, prints `Ship lost with all
+  hands!`, and sets `pending_game_over`; a destroyed hull is dropped from the
+  battlefield, so a wreck gets no last shot and takes no further impacts. The end
+  screen itself is Stage 13's, and the flag is deliberately the only thing this
+  stage raises.
+
+- **Off-screen contact indicators were not added — and that was the offer.**
+  Stage 10's notes handed Stage 11 a choice for the fact that a medium-band ship
+  parks 900px outside a 683px view: draw off-screen contact arrows, or let
+  projectiles visibly come in from outside the view. This stage took the second
+  option, because the rounds already exist, are faction-coloured, and are already
+  world-anchored and drawn through the shipping camera; a new HUD affordance is a
+  bigger promise than the spec's Stage 11 asks for. Consequence: in the shipped
+  tuning the player can be shot from off-screen with no hull in view, and the only
+  warning is the round itself (and the minimap). `scripts/capture_stage11_combat.py`
+  narrows `weapon_range` to 420px so the sheet shows a whole fight, which is a
+  capture-config trick and not a shipping change. If a later stage wants on-screen
+  bearing indicators, the data is already in `Gunfight.projectiles`.
+
+- **Particles are presentation state owned by the view and fed by the scene.**
+  `src/effects.py` gained `ParticleBurst` / `_Particle` / `ImpactEffects`, owned by
+  `TacticalView` (like the starfield and the warp tunnel: view state, not model
+  state) and spawned by `GameScene._resolve_impacts` through
+  `show_impact` / `show_destruction`. Sparks are stored in **world** coordinates
+  and drawn through `world_to_screen`, so a burst stays where the hit happened;
+  `ImpactEffects.draw` obeys the same `ship_visible` rule as the starfield, so
+  nothing burns inside a jump, and `notify_system_changed` clears them, because a
+  burst drawn in the wrong system is a coordinate bug the player sees as a ghost.
+  Bursts are tinted with the *firer's* colour over a fixed hot-spark palette: the
+  palette says "explosion", the tint says "who did this", and reusing faction
+  colours for the palette would make a pirate's death indistinguishable from a
+  pirate's shot. An impact is 12 particles at 2.6px/frame over 22 frames; a
+  destruction is 40 at 6.0px/frame over 48 — "larger" is particle count and spread,
+  not dot size. One silent tuning call, recorded: `_IMPACT_RADIUS` is 2 rather than
+  1, because a radius-1 spark is a 3px smudge against the starfield and a hit that
+  cannot be seen cannot warn anybody. Burst parameters are code constants, not
+  config keys — the spec fixes the round's 3px diameter and says nothing about the
+  size of an explosion, and a knob nothing tunes is a key every config file has to
+  carry. If Stage 12's audio or a settings screen ever wants them, they land as
+  config keys with the fixtures in the same change, as usual.
+
+- **The readout grew two bars, so its block grew too.** `hud.NEAREST_SHIP_ROWS`
+  (`alignment`, `shield`, `armor`) is the single source for the readout's height:
+  `NEAREST_RESERVE` is derived from it *including* the inter-row `GAP`, because
+  `ship_status_row_rects` spaces rows with gaps and a reserve without them let the
+  armour bar bleed 24px into the cargo panel. The bars themselves go through the
+  same `status_row_geometry` and `HudView._draw_bar_row` as the player's own Ship
+  Status block, which is the only way the spec's "displayed similarly to the bar in
+  the player's own Ship Status component" survives either block being edited. There
+  is deliberately no third (fuel) bar: an NPC hull has no fuel, and a bar for a
+  stat that does not exist is a readout lying. The alignment word is painted in the
+  faction's colour — the colour *is* the warning, and it comes from
+  `combatant_color`, not from a second HUD palette.
+
+- **Test patterns worth copying.** Hermetic throughout: fabricated configs via
+  `base_config()` plus section overrides (never the shipped JSON), the dummy SDL
+  drivers from `conftest.py`, and a seeded RNG so `hull()`'s stat rolls and the
+  particle jitter are reproducible. Two non-obvious ones: pixel assertions count
+  *changed* pixels between two canvases of the same view at the same camera
+  (`_changed_pixels`) rather than lit pixels — the starfield, planet, ship and HUD
+  are all painted too, so "how many pixels did the effect change" is the only
+  question with a trustworthy answer; and the capture script records the scene's
+  presentation calls (`show_destruction`, `show_message`) to decide *when* to
+  photograph, which is cheating about timing but not about content. The capture
+  also raises the player's armour on the **live** stat block rather than in the
+  config, because `roll_npc_stats` works from the player's *starting* stats and a
+  config boost puts 1000 points of armour on every pirate in the picture (the
+  resulting standoff is a funfair, not a fight).
+
+- **What Stage 11 deliberately does not have.** No sound for gunfire, impacts or
+  deaths (Stage 12's audio seams exist — `_SpyAudio` in the scene tests is the
+  pattern the next stage will use). No "who is shooting at me" indicator, no
+  reputation or faction-standing display beyond the readout's alignment word, no
+  wrecks or debris fields, no shields-regenerating-over-time, no missile or
+  homing weapons, and no end-of-run screen. `BOUNTY_MESSAGE_FRAMES` is currently
+  shared by the bounty banner and the "Ship lost with all hands!" banner; that is
+  one constant serving two unrelated pieces of copy, and it should be split the
+  first time either duration changes.

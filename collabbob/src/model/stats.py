@@ -56,3 +56,25 @@ def ship_stats_from_config(player_ship: dict) -> ShipStats:
         length=float(player_ship["length"]),
         width=float(player_ship["width"]),
     )
+
+
+def apply_damage_order(
+    shields: float, armor: float, amount: float
+) -> "tuple[float, float]":
+    """Spend damage on shields first, then on the hull; return ``(shields, armor)``.
+
+    The spec's damage order, written exactly once. The player's hull and every
+    NPC hull call this, because "shield absorbs before armour" is the sort of
+    rule that silently drifts the moment it exists twice — one copy starting to
+    round, another to floor, a third to let a shot punch through shields early.
+
+    Nothing here clamps armour at zero: a hull below zero is a destroyed hull
+    (see the ``destroyed`` properties that read this), and clamping here would
+    make "overkill" unobservable to the code that reports kills and bounties.
+    Shields are never driven below zero, since that would be armour damage
+    charged twice.
+    """
+    incoming = max(0.0, float(amount))
+    current_shields = float(shields)
+    absorbed = min(current_shields, incoming)
+    return current_shields - absorbed, float(armor) - (incoming - absorbed)

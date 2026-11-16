@@ -200,6 +200,27 @@ def choose_ship_count(rng: "_random_lib.Random", rules: SpawnRules) -> int:
     return rng.randint(rules.ships_min, rules.ships_max)
 
 
+def nearest_living_ship(ships: Sequence["NpcShip"], position: Vec2) -> Optional["NpcShip"]:
+    """The closest not-yet-destroyed ship to a point, or ``None``.
+
+    One implementation because two consumers ask the same question with the same
+    answer: the HUD's nearest-ship readout and Stage 11's scan. Ties break to the
+    earlier ship in ``ships`` (spawn order), which keeps the answer deterministic
+    for a ship that spawned exactly between two others rather than leaving it to
+    dictionary or set ordering.
+    """
+    best: Optional[NpcShip] = None
+    best_distance = float("inf")
+    for ship in ships:
+        if ship.destroyed:
+            continue
+        distance = distance_between(position, ship.position)
+        if distance < best_distance:
+            best = ship
+            best_distance = distance
+    return best
+
+
 def spawn_position(
     rng: "_random_lib.Random",
     system_pixel_size: float,
@@ -410,16 +431,27 @@ class Encounter:
         nearest ship in the system, and the alignment it prints (cyan/yellow/red)
         is the player's way of finding out whether that is a good thing.
         """
-        best: Optional[NpcShip] = None
-        best_distance = float("inf")
-        for ship in self._ships:
-            if ship.destroyed:
-                continue
-            distance = distance_between(position, ship.position)
-            if distance < best_distance:
-                best = ship
-                best_distance = distance
-        return best
+        return nearest_living_ship(self._ships, position)
+
+    def prune_destroyed(self) -> "list[NpcShip]":
+        """Throw the wrecks overboard; return the hulls removed this frame.
+
+        A destroyed hull is not an object the game keeps arguing with: it is out of
+        the system for the rest of the visit (ships "do not respawn" and there is no
+        salvage). Removing it rather than flagging it is what makes every other
+        question about the fleet answer itself — the AI stops targeting it, the
+        minimap stops painting it, the scan stops reporting it, and a stray projectile
+        cannot hit a corpse for a second bounty.
+
+        The scan keeps its lock across a prune: :class:`~src.model.scan.ShipScanner`
+        holds the object itself, which is exactly how "reverts to No target when the
+        displayed ship is destroyed" can be detected at all.
+        """
+        if not any(ship.destroyed for ship in self._ships):
+            return []
+        gone = [ship for ship in self._ships if ship.destroyed]
+        self._ships = tuple(ship for ship in self._ships if not ship.destroyed)
+        return gone
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"Encounter(system={self.system!r}, ships={len(self._ships)})"

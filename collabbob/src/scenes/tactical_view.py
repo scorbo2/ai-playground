@@ -19,13 +19,15 @@ from typing import TYPE_CHECKING
 import pygame
 
 from src.camera import world_to_screen
-from src.effects import WarpTunnel
+from src.effects import ImpactEffects, WarpTunnel
 from src.hud import VIEW_WIDTH, landing_prompt_text
 from src.input import Action, InputLayer
+from src.model.combat import CombatRules
 from src.model.factions import (
     FACTION_BOBBER,
     FACTION_LOCALHOSTER,
     FACTION_PIRATE,
+    combatant_color,
     faction_color,
 )
 from src.model.game_state import PLANET_WORLD_POSITION, GameState
@@ -197,6 +199,11 @@ class TacticalView:
             max_radius=math.hypot(VIEW_WIDTH, SCREEN_SIZE[1]) / 2.0,
             rng=self.game_state.rng,
         )
+        # Presentation-only use of the combat rules: the view needs the dot size,
+        # and reading it through the same :class:`CombatRules` the simulation uses
+        # (same function, same validated config section) is what keeps "a 3px
+        # circle" from meaning 3px on one screen and 6px on another.
+        self.combat_rules = CombatRules.from_config(self.configs["combat"])
         # Which system is being rendered: drives the planet colour, and is set
         # by notify_system_changed() on arrival.
         self.system_name = "Alpha"
@@ -205,6 +212,11 @@ class TacticalView:
         # world always publishes an Encounter, and drawing is not allowed to
         # invent one.
         self.encounter = None
+        # The shots currently in flight, likewise published by GameScene. Empty
+        # for a standalone view: an unarmed reviewer gets an honest picture.
+        self.projectiles: "tuple" = ()
+        # Sparks from impacts and wrecks, advanced and drawn by this view.
+        self.impacts = ImpactEffects(rng=self.game_state.rng)
         self._npc_surfaces = self._build_npc_surfaces()
         self._boundary_warning_cooldown = 0
         # Cached, unrotated blocky shuttle drawn at the ship's length/width.
@@ -229,6 +241,7 @@ class TacticalView:
         self.system_name = system_name
         self.starfield = self._build_starfield()
         self.warp.reset()
+        self.impacts.clear()
         self.overlays.set_sticky(None)
 
     # ------------------------------------------------------------------
@@ -265,6 +278,7 @@ class TacticalView:
         if self.jump.in_hyperspace:
             self.warp.advance(self._warp_intensity())
 
+        self.impacts.advance()
         self._update_landing_prompt()
         self._update_boundary_warning()
         self.overlays.update()
@@ -277,6 +291,21 @@ class TacticalView:
     def show_message(self, text: str, duration_frames: int = 180) -> None:
         """Overlay a transient message on the game view (Stages 8/11 use this)."""
         self.overlays.show(text, duration_frames)
+
+    def show_impact(self, position: "tuple[float, float]", tint: "tuple[int, int, int]") -> None:
+        """A projectile landed at this world point: paint the small spray.
+
+        Called by :class:`~src.scenes.game_scene.GameScene` when the model reports
+        an :class:`~src.model.combat.Impact`. The position is a world coordinate,
+        so the sparks stay where the hit happened even as the camera slides on.
+        """
+        self.impacts.spawn_impact(position, tint=tint)
+
+    def show_destruction(
+        self, position: "tuple[float, float]", tint: "tuple[int, int, int]"
+    ) -> None:
+        """A hull came apart at this world point: paint the big spray."""
+        self.impacts.spawn_destruction(position, tint=tint)
 
     def _update_landing_prompt(self) -> None:
         """Keep the landing prompt visible while the ship is in landing range.
@@ -314,21 +343,17 @@ class TacticalView:
     def on_action(self, action: Action) -> None:
         """Dispatch a discrete action from the input layer.
 
-        Stage 5 registers the bindings here. Firing produces no projectile yet;
-        the other bindings are accepted so later stages can wire handlers
-        without re-registering them.
+        Stage 5 registered the bindings here; Stage 11 moved the one that matters
+        for the simulation elsewhere. ``fire`` is handled by
+        :class:`~src.scenes.game_scene.GameScene`, because pulling the player's
+        trigger is a session concern (it produces a :class:`Shot` that the visit's
+        :class:`~src.model.combat.Gunfight` consumes), not a rendering concern —
+        the view that both drains the input and paints the result is the worst
+        place to decide whether the gun was actually ready.
         """
-        if action.kind == "fire":
-            self._on_fire()
-        else:
-            # open_map / jump / land / scan / exit_game are registered but
-            # handled in their owning stages; nothing to do yet.
-            pass
-
-    def _on_fire(self) -> None:
-        """Record a fired shot. Projectile generation is added in Stage 11."""
-        # Intentionally empty for now: space fires without creating a projectile.
-        pass
+        # open_map / jump / land / scan / fire / exit_game are consumed by their
+        # owning stages; the view has no gameplay input of its own left.
+        return
 
     # ------------------------------------------------------------------
     # Drawing
@@ -343,7 +368,9 @@ class TacticalView:
         self._draw_stars(surface)
         self._draw_planet(surface)
         self._draw_contacts(surface)
+        self._draw_projectiles(surface)
         self._draw_ship(surface)
+        self._draw_impacts(surface)
         self._draw_warp_tunnel(surface)
         self.overlays.draw(surface)
 
@@ -425,9 +452,9 @@ class TacticalView:
         wins it, and the answer must always be the hull the player is steering.
 
         Ships are hidden during the white-out for the same reason the player is
-        (see :meth:`_draw_ship`): during hyperspace nobody is in this universe.
-        Stage 11's projectiles will hang off the same encounter, so they inherit
-        that rule rather than reinventing it.
+        (see :meth:`_draw_ship`): during hyperspace nobody is in this universe. The
+        projectiles and sparks the same visit produced inherit that rule rather
+        than reinventing it.
 
         Culling is not a performance nicety. A system is ``tactical.system_pixel_size``
         across and the game view is 683px, so in most frames most of a fleet is off
@@ -443,6 +470,51 @@ class TacticalView:
         try:
             for ship in self.encounter.ships:
                 self._draw_one_contact(surface, ship)
+        finally:
+            surface.set_clip(None)
+
+    def _draw_projectiles(self, surface: "pygame.Surface") -> None:
+        """Every round in flight, as the spec's solid 3px circle.
+
+        Coloured by whoever fired it (the player green, each faction its own),
+        which is the only cue the player has that a stray Localhoster round is not
+        an act of war — see the pass-through note in :mod:`src.model.combat`.
+
+        Hidden during the white-out for the same reason the hulls are: a visit ends
+        at the gate and the rounds with it, so anything in flight here would be a
+        projectile from a universe the player is no longer in.
+        """
+        if not self.projectiles or not self.jump.ship_visible:
+            return
+        radius = self.combat_rules.projectile_radius
+        surface.set_clip(_GAME_VIEW_RECT)
+        try:
+            for shot in self.projectiles:
+                screen_x, screen_y = world_to_screen(
+                    shot.position[0], shot.position[1],
+                    self.game_state.position, _VIEW_CENTER,
+                )
+                # A round outside the view costs nothing to skip, and clipping the
+                # surface would not be enough on its own: a 3px dot two pixels off
+                # the HUD edge is still a dot painted on the HUD.
+                if not (0.0 <= screen_x < VIEW_WIDTH and 0.0 <= screen_y < SCREEN_SIZE[1]):
+                    continue
+                pygame.draw.circle(
+                    surface,
+                    combatant_color(shot.faction),
+                    (int(round(screen_x)), int(round(screen_y))),
+                    radius,
+                )
+        finally:
+            surface.set_clip(None)
+
+    def _draw_impacts(self, surface: "pygame.Surface") -> None:
+        """Sparks from hits and wrecks, drawn over the hulls they happened to."""
+        if self.impacts.is_empty or not self.jump.ship_visible:
+            return
+        surface.set_clip(_GAME_VIEW_RECT)
+        try:
+            self.impacts.draw(surface, self.game_state.position, _VIEW_CENTER)
         finally:
             surface.set_clip(None)
 

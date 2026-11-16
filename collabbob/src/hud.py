@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import pygame
 
 from src.fonts import game_font, render_text
-from src.model.factions import faction_color
+from src.model.factions import faction_color, faction_label
 from src.model.game_state import GameState
 
 if TYPE_CHECKING:
@@ -41,7 +41,24 @@ BAR_HEIGHT = 8      # height of a status bar in px
 BAR_PADDING_X = 6   # horizontal padding inside a status bar
 GAP = 12            # vertical gap between stacked components
 LINE_HEIGHT = 30    # height of a single text line (navigation, cargo rows)
-NEAREST_RESERVE = 90  # reserved height for the nearest-ship readout block
+
+# The nearest-ship readout's internal rows: an alignment line, then the two
+# defence bars. NPC hulls have no fuel, so there is no third bar — inventing a
+# full bar for a stat that does not exist is how a readout starts lying.
+NEAREST_SHIP_ROWS = ("alignment", "shield", "armor")
+# Derived, not typed: a fourth row would move the cargo block down and the Stage 6
+# layout gate would only catch it if the number below moved with it. The gap
+# arithmetic matches `ship_status_row_rects`, which is what actually draws the rows:
+# a reserve without the trailing-gap-free spacing would let the last bar bleed into
+# the cargo panel.
+NEAREST_RESERVE = (
+    len(NEAREST_SHIP_ROWS) * LINE_HEIGHT + (len(NEAREST_SHIP_ROWS) - 1) * GAP
+)
+
+# The readout's empty state, named because two places assert on it (the HUD draws
+# it, a test pins that a new system always starts there) and it is player-facing
+# copy, not a debug string.
+NO_TARGET_TEXT = "No target"
 
 TEXT_SIZE = 18
 BANNER_TEXT_SIZE = 18
@@ -213,6 +230,37 @@ def landing_prompt_text(distance: float, landing_range: float) -> Optional[str]:
     return None
 
 
+def nearest_ship_row_rects(readout_rect: "pygame.Rect") -> list:
+    """Split the nearest-ship readout into its alignment row and two bar rows.
+
+    The same exported row geometry as the ship-status block, which is what makes
+    the spec's "displayed similarly to the bar in the player's own Ship Status
+    component" a shared function rather than a similarity claim. The readout is one
+    bordered component; these are its internal rows, not components, so they are
+    not part of the overlap/fit layout contract.
+    """
+    return ship_status_row_rects(readout_rect, len(NEAREST_SHIP_ROWS))
+
+
+def contact_alignment_label(contact: object) -> str:
+    """The alignment word for a scanned contact: "Localhoster"/"Bobber"/"Pirate"."""
+    return faction_label(contact.faction)  # type: ignore[attr-defined]
+
+
+def contact_status_rows(contact: object) -> "tuple[tuple[str, float, float], ...]":
+    """A scanned contact's defence bars: ``(label, current, capacity)`` per row.
+
+    Shield then armour, matching the player's own order, because the HUD is one
+    vocabulary: two different orders in two adjacent blocks is how a player reads
+    the wrong bar during the one second they have to decide whether to run.
+    """
+    stats = contact.stats  # type: ignore[attr-defined]
+    return (
+        ("shield", contact.shields, stats.max_shields),  # type: ignore[attr-defined]
+        ("armor", contact.armor, stats.max_armor),  # type: ignore[attr-defined]
+    )
+
+
 def hud_layout(available_width: int) -> dict[str, "pygame.Rect"]:
     """Local-coordinate rects for every HUD component.
 
@@ -262,10 +310,13 @@ class HudView:
     change.
 
     Fields that no stage has implemented yet are explicit seams, each documented
-    with the stage that fills it: ``nearest_ship`` (Stage 11), and the economy
-    readouts (Stage 9, now live). ``contacts`` is Stage 10's: the fleet in the
-    current system, published by GameScene at draw time. Capacities are read from
-    the ship stats, which do exist.
+    with the stage that fills it: the economy readouts (Stage 9, now live) and the
+    game-over state (Stage 13). ``contacts`` is Stage 10's: the fleet in the
+    current system, published by GameScene at draw time. ``nearest_ship`` is
+    Stage 11's, and it is *published* rather than chosen: it is the hull the
+    scene's :class:`~src.model.scan.ShipScanner` is locked on, or ``None`` for
+    "No target" — the HUD never decides what the player is looking at, it only
+    paints it.
     """
 
     def __init__(self, manager: "SceneManager", game_state: GameState) -> None:
@@ -281,6 +332,8 @@ class HudView:
         # a ship for anything else: a readout that starts simulating is a readout
         # that eventually disagrees with the simulation.
         self.contacts: Sequence[object] = ()
+        # The scanned hull (anything exposing ``faction``, ``shields``, ``armor``
+        # and a ``stats`` block), or None for the spec's "No target".
         self.nearest_ship: Optional[object] = None
         self.nav_selected_name: Optional[str] = None
         self.is_jumping: bool = False
@@ -368,23 +421,41 @@ class HudView:
         for row in row_rects:
             self._panel(surface, row)
 
-        for i, (label, value, capacity) in enumerate(rows):
-            row = row_rects[i]
-            # Geometry is derived per row: the horizontal layout is identical for
-            # every row, but each bar must sit inside its own bordered box.
-            label_x, track = status_row_geometry(row, labels)
-            surface.blit(
-                render_text(label, TEXT_SIZE, _HudPalette.text),
-                (label_x, row.top + (row.height - TEXT_SIZE) // 2),
+        for row, (label, value, capacity) in zip(row_rects, rows):
+            self._draw_bar_row(surface, row, labels, label, value, capacity)
+
+    def _draw_bar_row(
+        self,
+        surface: "pygame.Surface",
+        row: "pygame.Rect",
+        labels: Sequence[str],
+        label: str,
+        value: float,
+        capacity: float,
+    ) -> None:
+        """Paint one status row — label, track, fill — inside an already-cleared box.
+
+        Shared by the player's Ship Status block and a scanned contact's readout,
+        which is the only way the spec's "displayed similarly to the bar in the
+        player's own Ship Status component" stays true after either block is
+        touched. The label list is passed in rather than derived from the single
+        label because the shared geometry aligns every bar in a group to the
+        widest label *of that group* — a two-row contact block gets slightly wider
+        bars than a three-row player block, and both are correctly aligned.
+        """
+        label_x, track = status_row_geometry(row, labels)
+        surface.blit(
+            render_text(label, TEXT_SIZE, _HudPalette.text),
+            (label_x, row.top + (row.height - TEXT_SIZE) // 2),
+        )
+        pygame.draw.rect(surface, _HudPalette.bar_track, track, 1)
+        ratio = value / capacity if capacity else 0.0
+        fill_width = int(track.width * max(0.0, min(1.0, ratio)))
+        if fill_width > 0:
+            pygame.draw.rect(
+                surface, _HudPalette.bar_fill,
+                pygame.Rect(track.left, track.top, fill_width, track.height),
             )
-            pygame.draw.rect(surface, _HudPalette.bar_track, track, 1)
-            ratio = value / capacity if capacity else 0.0
-            fill_width = int(track.width * max(0.0, min(1.0, ratio)))
-            if fill_width > 0:
-                pygame.draw.rect(
-                    surface, _HudPalette.bar_fill,
-                    pygame.Rect(track.left, track.top, fill_width, track.height),
-                )
 
     # -- navigation status --------------------------------------------
     def _draw_navigation(self, surface: "pygame.Surface") -> None:
@@ -402,12 +473,46 @@ class HudView:
 
     # -- nearest ship readout -----------------------------------------
     def _draw_nearest_ship(self, surface: "pygame.Surface") -> None:
+        """The scanned contact: alignment in its faction colour, then two bars.
+
+        What is displayed here is *not* chosen by this component: GameScene
+        publishes whichever hull the :class:`~src.model.scan.ShipScanner` is locked
+        on, and the lock is sticky (spec: the ship stays displayed even when it
+        stops being the nearest). A HUD that re-picked the nearest ship every frame
+        would be a second scanner, and the two would disagree the first time a
+        pirate flew past the hull the player was watching.
+
+        The alignment word is the only hostility cue the spec asks for — cyan
+        Localhoster, yellow Bobber, red Pirate — which is also why the word is
+        painted in the faction's own colour rather than the HUD's green: the colour
+        is the warning.
+        """
         rect = self._rects["nearest_ship"]
         self._panel(surface, rect)
-        # Stage 11 replaces this with the scanned ship's alignment + bars.
-        text = "No target" if self.nearest_ship is None else str(self.nearest_ship)
-        label = render_text(text, TEXT_SIZE, _HudPalette.text)
-        surface.blit(label, (rect.left + BORDER + BAR_PADDING_X, rect.top + GAP))
+
+        if self.nearest_ship is None:
+            surface.blit(
+                render_text(NO_TARGET_TEXT, TEXT_SIZE, _HudPalette.text),
+                (rect.left + BORDER + BAR_PADDING_X, rect.top + GAP),
+            )
+            return
+
+        rows = nearest_ship_row_rects(rect)
+        alignment = render_text(
+            contact_alignment_label(self.nearest_ship),
+            TEXT_SIZE,
+            faction_color(self.nearest_ship.faction),  # type: ignore[attr-defined]
+        )
+        surface.blit(
+            alignment,
+            (rows[0].left + BORDER + BAR_PADDING_X,
+             rows[0].top + (rows[0].height - alignment.get_height()) // 2),
+        )
+
+        bar_rows = contact_status_rows(self.nearest_ship)
+        labels = [label for label, _, _ in bar_rows]
+        for row, (label, value, capacity) in zip(rows[1:], bar_rows):
+            self._draw_bar_row(surface, row, labels, label, value, capacity)
 
     # -- cargo / passengers / credits ---------------------------------
     def _draw_cargo_and_credits(self, surface: "pygame.Surface") -> None:

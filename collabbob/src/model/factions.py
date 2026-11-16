@@ -19,6 +19,16 @@ Faction **colours** live here too, against the faction ids. The spec's palette
 guidance allows colours-as-defaults in code, and the three colours the game must
 agree on (minimap markers, hulls, projectiles, the HUD alignment label) are
 identity, not tunables: a Localhoster is cyan everywhere or the game is lying.
+
+Stage 11 adds a fourth *combatant*: the player. The player is deliberately not a
+faction — the matrix has no row for them (their relations are the mutable
+:class:`PlayerRelations` above, not a matrix entry), and letting ``"player"``
+into the matrix would invite questions like "is a pirate hostile to the player
+according to the static table?" which has the wrong answer. What the player *is*
+allowed to be is a **combatant**: a side a projectile can be attributed to, and a
+colour it can be drawn in (green, per the spec). Hence :func:`require_combatant`
+and :func:`combatant_color`, which accept the player, sitting beside
+:func:`require_faction`, which does not.
 """
 
 from __future__ import annotations
@@ -35,6 +45,13 @@ FACTION_PIRATE = "pirate"
 # and every validation check is built from, in this order.
 FACTIONS: Tuple[str, ...] = (FACTION_LOCALHOSTER, FACTION_BOBBER, FACTION_PIRATE)
 
+# The player's own side. Not a faction (no matrix row, no spawn pool, no label in
+# the scan readout); a provenance tag for a projectile and a colour to draw it in.
+FACTION_PLAYER = "player"
+
+# Everything a projectile or a hit may be attributed to.
+COMBATANTS: Tuple[str, ...] = FACTIONS + (FACTION_PLAYER,)
+
 # HUD copy (spec: the readout shows "Localhoster" / "Bobber" / "Pirate").
 FACTION_LABELS: Dict[str, str] = {
     FACTION_LOCALHOSTER: "Localhoster",
@@ -47,6 +64,17 @@ FACTION_COLORS: Dict[str, Tuple[int, int, int]] = {
     FACTION_LOCALHOSTER: (0, 200, 200),
     FACTION_BOBBER: (230, 200, 60),
     FACTION_PIRATE: (255, 0, 0),
+}
+
+# Spec: "Player projectiles are solid green 3px diameter circles." Green is not
+# in the faction trio, which is exactly why the player needs their own entry: a
+# player shot drawn in anyone else's colour would misreport who fired.
+PLAYER_COLOR: Tuple[int, int, int] = (60, 220, 60)
+
+# The full palette every gun and every readout draws from, keyed by combatant.
+COMBATANT_COLORS: Dict[str, Tuple[int, int, int]] = {
+    **FACTION_COLORS,
+    FACTION_PLAYER: PLAYER_COLOR,
 }
 
 
@@ -75,6 +103,51 @@ def faction_color(faction: str) -> Tuple[int, int, int]:
     """The one true colour of a faction (hulls, markers, projectiles, HUD)."""
     require_faction(faction)
     return FACTION_COLORS[faction]
+
+
+def require_combatant(combatant: str) -> str:
+    """Validate a *combatant* id: the three factions plus the player.
+
+    The wider vocabulary exists for Stage 11's provenance rules (whose gun fired,
+    whose hull gets clipped). It is deliberately not accepted by the hostility
+    matrix, whose :func:`require_faction` still refuses ``"player"``.
+    """
+    if combatant not in COMBATANTS:
+        raise UnknownFaction(
+            f"unknown combatant {combatant!r}; expected one of {COMBATANTS}"
+        )
+    return combatant
+
+
+def combatant_color(combatant: str) -> Tuple[int, int, int]:
+    """The colour of anything attributable to ``combatant``, the player included."""
+    require_combatant(combatant)
+    return COMBATANT_COLORS[combatant]
+
+
+def is_npc_faction(combatant: str) -> bool:
+    """Whether ``combatant`` is one of the three spawned factions.
+
+    Combat code asks this a lot: only NPC hulls can be scanned, only NPC hulls
+    carry bounties, and the player is not a faction that can hold a grudge.
+    """
+    return combatant in FACTIONS
+
+
+def war_side_of(faction: str) -> str:
+    """The other war-side (Localhoster <-> Bobber); pirates have no ally or rival.
+
+    Stage 11's cross-faction bounties are paid by the victim's *enemy*, so the
+    game needs this one lookup, and it needs to refuse to answer for pirates
+    rather than inventing a "pirate rival" that the lore does not have.
+    """
+    require_faction(faction)
+    if faction == FACTION_PIRATE:
+        raise UnknownFaction(
+            "pirates are hostile to every faction, so no faction pays a bounty for "
+            "killing one: the bounty comes from the game, not from a rival"
+        )
+    return FACTION_BOBBER if faction == FACTION_LOCALHOSTER else FACTION_LOCALHOSTER
 
 
 def factions_are_hostile(first: str, second: str) -> bool:
