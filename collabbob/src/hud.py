@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Optional, Sequence
 import pygame
 
 from src.fonts import game_font, render_text
+from src.model.factions import faction_color
 from src.model.game_state import GameState
 
 if TYPE_CHECKING:
@@ -65,7 +66,9 @@ class _HudPalette:
     border = (128, 128, 128)
     ship = (255, 255, 255)
     planet = (60, 180, 90)
-    enemy = (255, 0, 0)
+    # No contact colour here on purpose: a contact's colour *is* its faction
+    # (cyan/yellow/red), and a second palette entry for the same ships is how a
+    # minimap ends up drawing a Bobber yellow in one place and cyan in another.
 
 
 # ---------------------------------------------------------------------------
@@ -259,10 +262,10 @@ class HudView:
     change.
 
     Fields that no stage has implemented yet are explicit seams, each documented
-    with the stage that fills it: ``enemies`` (Stage 10), ``nearest_ship``
-    (Stage 11), ``nav_selected_name``/``is_jumping`` (Stages 7/8), and
-    ``credits``/``cargo_used``/``passengers_used`` (Stage 9). Capacities are read
-    from the ship stats, which do exist.
+    with the stage that fills it: ``nearest_ship`` (Stage 11), and the economy
+    readouts (Stage 9, now live). ``contacts`` is Stage 10's: the fleet in the
+    current system, published by GameScene at draw time. Capacities are read from
+    the ship stats, which do exist.
     """
 
     def __init__(self, manager: "SceneManager", game_state: GameState) -> None:
@@ -273,8 +276,11 @@ class HudView:
         self._rects = to_screen_layout(hud_layout(HUD_WIDTH - 2 * BORDER))
         self._hud_rect = pygame.Rect(HUD_ORIGIN_X, 0, HUD_WIDTH, SCREEN_SIZE[1])
 
-        # Hostile contacts in world coordinates (Stage 10 populates these).
-        self.enemies: list[tuple[float, float]] = []
+        # Hostile contacts in the current system, as anything exposing a world
+        # ``position`` and a ``faction`` (Stage 10's NpcShip). The HUD never asks
+        # a ship for anything else: a readout that starts simulating is a readout
+        # that eventually disagrees with the simulation.
+        self.contacts: Sequence[object] = ()
         self.nearest_ship: Optional[object] = None
         self.nav_selected_name: Optional[str] = None
         self.is_jumping: bool = False
@@ -323,10 +329,16 @@ class HudView:
                 surface, _HudPalette.planet, planet_arrow_points(center, half, a, b)
             )
 
-        for enemy_x, enemy_y in self.enemies:
-            offset = ((enemy_x - ship_x) * scale, (enemy_y - ship_y) * scale)
+        for contact in self.contacts:
+            contact_x, contact_y = contact.position  # type: ignore[attr-defined]
+            offset = ((contact_x - ship_x) * scale, (contact_y - ship_y) * scale)
             if not is_planet_off_map(offset[0], offset[1], half):
-                self._marker(surface, center, offset, ENEMY_MARKER_SIZE, _HudPalette.enemy)
+                # The marker colour is the faction, so the minimap answers "who is
+                # out there" and not merely "how many".
+                self._marker(
+                    surface, center, offset, ENEMY_MARKER_SIZE,
+                    faction_color(contact.faction),  # type: ignore[attr-defined]
+                )
 
         # The player sits on top of everything else on the minimap.
         self._marker(surface, center, (0.0, 0.0), SHIP_MARKER_SIZE, _HudPalette.ship)

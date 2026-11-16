@@ -37,6 +37,8 @@ from src.map_systems.layout import build_map_layout
 from src.map_systems.system_map import SystemMapState
 from src.main_loop import SCREEN_SIZE
 from src.model.economy import PortVisit, generate_port_offers, port_rng
+from src.model.encounter import Encounter, SpawnRules, encounter_rng, roll_encounter
+from src.model.factions import PlayerRelations
 from src.model.game_state import PLANET_WORLD_POSITION, GameState
 from src.model.jump import (
     BLOCKED_EXACT_FUEL,
@@ -47,6 +49,7 @@ from src.model.jump import (
     JumpParams,
 )
 from src.model.lore import LoreBook
+from src.model.weapons import Shot
 from src.scene_manager import Scene
 from src.scenes.map_view import MapView
 from src.scenes.spaceport_view import SpaceportView
@@ -76,13 +79,19 @@ def _gameplay_rng(config: dict) -> "_random_lib.Random | None":
     return None if seed is None else _random_lib.Random(seed)
 
 
-def _market_seed(config: dict) -> int:
-    """The base for every per-system market stream (see :func:`port_rng`).
+def _session_seed(config: dict) -> int:
+    """The base for every derived per-system stream: markets and fleets alike.
 
-    With ``rng.seed`` set, every market board in the run is reproducible from that
-    seed plus the order of entries. With it unset - how the game ships - a random
-    per-run nonce is drawn, which still gives the property that matters here: the
-    market a player sees when they enter a system does not change under them.
+    With ``rng.seed`` set, every market board and every spawn roll in the run is
+    reproducible from that seed plus the order of entries. With it unset - how the
+    game ships - a random per-run nonce is drawn, which still gives the property
+    that matters here: the world does not change under the player between the
+    moment they enter a system and the moment they look at it.
+
+    One seed, many streams: each consumer namespaces the key it derives
+    (``port_rng`` for the job market, ``encounter_rng`` for the fleet), so
+    sharing the seed cannot make the pirates in Bravo depend on the cargo rates
+    in Bravo.
     """
     seed = config.get("rng", {}).get("seed")
     if seed is None:
@@ -114,11 +123,29 @@ class GameScene(Scene):
         # is dealt on entry and survives launches, so "launch, then land again"
         # cannot re-roll the work on offer. It is replaced only when the player
         # enters a system again (see :meth:`_enter_system`).
-        self.market_seed = _market_seed(config)
-        self.port_visit: PortVisit = self._enter_system(self.system_map.current_system)
+        #
+        # The same entry also deals the fleet. Both are per-entry, both derive
+        # their RNG stream from this one session seed, and neither shares a
+        # stream with the other (the suffixes in the two rng helpers keep them
+        # apart).
+        self.session_seed = _session_seed(config)
+        self.npc_rules = self._build_spawn_rules(config)
+        # Grudges outlive systems and visits: one relations object per game, so
+        # a faction shot at in Alpha is still shooting in Zulu, and a new game
+        # starts neutral because it builds a new GameScene.
+        self.relations = PlayerRelations()
+        # Declared here so a reader of __init__ sees the two per-visit world
+        # objects a GameScene always has; both are filled by _enter_system.
+        self.port_visit: PortVisit
+        self.encounter: Encounter
+        self._enter_system(self.system_map.current_system)
         # Whether the spaceport modal is currently on the stack. Deliberately
         # separate from ``port_visit``, which now outlives the modal.
         self._port_modal_open = False
+        # Whatever the system's fleet fired on the most recent frame. Replaced,
+        # never appended to, so a scene that never drains it (every scene until
+        # Stage 11) cannot grow it. Stage 11 turns these into projectiles.
+        self.pending_shots: "list[Shot]" = []
         # The jump sequence is owned here because it is the only thing that
         # needs the ship *and* the world at the same time.
         self.jumps = JumpController(
@@ -137,6 +164,20 @@ class GameScene(Scene):
         # Stage 13 seam: see _request_jump. Public so the flow tests can assert
         # on it without reaching into private state.
         self.pending_game_over = False
+
+    def _build_spawn_rules(self, config: dict) -> SpawnRules:
+        """Hoist the ``npc`` section into the rules the spawner and AI run on.
+
+        The loader already rejects nonsense ranges, so this only exists to turn a
+        hand-built config (tooling, or a future save file) into the same
+        "report it like a config failure" message instead of a raw KeyError in the
+        middle of the first hostile system the player ever enters.
+        """
+        try:
+            return SpawnRules.from_config(config["npc"])
+        except (KeyError, TypeError, ValueError) as exc:
+            print(f"error: cannot build NPC spawn rules from config: {exc}", file=sys.stderr)
+            raise SystemExit(1) from exc
 
     # ------------------------------------------------------------------
     # The world: generated once per game, then cached
@@ -213,23 +254,35 @@ class GameScene(Scene):
                 self._open_spaceport()
         self._close_port_modal()
         self._advance_jump()
+        self._advance_encounter()
         self._sync_jump_presentation()
         return tuple(actions)
 
-    def _enter_system(self, system: str) -> PortVisit:
-        """Deal the job market of a system the player has just entered.
+    def _enter_system(self, system: str) -> None:
+        """Deal what one visit to a system consists of: its job market and its traffic.
 
-        One board per *entry*, not per landing. Rolling on landing made the port a
-        free slot machine: ``L``, glance at the contracts, ``ESC``, ``L`` - two key
-        presses and everything is re-dealt, so the best board was always one abort
-        away and no play pattern punished that. The work on offer now belongs to
-        the visit: launch and land again in the same system and the same contracts
-        are still there, minus anything already taken, while jumping out and back
-        is a new visit and does deal a new board.
+        Both are dealt on *entry*, not on landing, and both for the same reason.
+        Rolling the market on landing made the port a free slot machine: ``L``,
+        glance at the contracts, ``ESC``, ``L`` - two key presses and everything is
+        re-dealt, so the best board was always one abort away. Rolling the fleet on
+        landing would be the same trick in the other direction: park in orbit,
+        ``L`` to make everyone disappear, launch, and repeat until the system
+        happens to be empty. The visit is the unit of both, so a jump out and back
+        is the only thing that re-deals them.
 
-        The board is also priced against the hull the player had *on entry*, which
+        The market is also priced against the hull the player had *on entry*, which
         closes the other free lunch: "buy the cargo upgrade here, land again, farm
         bigger jobs at the same port".
+
+        Dropping the old :class:`Encounter` here *is* the despawn rule: ships do not
+        respawn, and a jump out and back does not remember who was orbiting last
+        time. Stage 11 must clear its projectiles at the same boundary — the ships
+        that fired them no longer exist.
+
+        Both rolls key off the same system-entry serial but namespace it
+        differently (see :func:`port_rng` and :func:`encounter_rng`), so entering
+        Bravo deals a Bravo market and a Bravo fleet reproducibly without either
+        one consuming the other's random draws.
         """
         serial = self.game_state.begin_port_visit()
         self.port_visit = generate_port_offers(
@@ -238,10 +291,39 @@ class GameScene(Scene):
             current_system=system,
             stats=self.game_state.stats,
             upgrade_levels=self.game_state.upgrade_levels,
-            rng=port_rng(self.market_seed, system, serial),
+            rng=port_rng(self.session_seed, system, serial),
             visit_serial=serial,
         )
-        return self.port_visit
+        self.encounter = roll_encounter(
+            system=system,
+            system_names=self.system_map.graph.names,
+            rules=self.npc_rules,
+            # Never ``game_state.stats``: the spec pins NPC hulls to the ship the
+            # player *started* with, so upgrading never rescales the galaxy.
+            starting_stats=self.game_state.starting_stats,
+            system_pixel_size=self.game_state.system_pixel_size,
+            player_position=self.game_state.position,
+            rng=encounter_rng(self.session_seed, system, serial),
+            relations=self.relations,
+        )
+
+    def _advance_encounter(self) -> None:
+        """Run the current system's fleet for one frame; keep the shots it fired.
+
+        Skipped while a jump is animating: the player is in hyperspace, and the
+        ships in the system being left are thrown away at the far end of the
+        sequence anyway, so a frame of NPC physics spent on them is behaviour
+        nobody can observe. The new system's fleet is dealt by ``_enter_system``
+        on the arrival frame and starts moving on the next one.
+
+        ``pending_shots`` is Stage 11's seam: the AI owns when and where a gun
+        fires, the projectile simulation owns what a projectile does. They are not
+        the same job, and this is the handoff.
+        """
+        if self.jumps.is_active:
+            self.pending_shots = []
+            return
+        self.pending_shots = self.encounter.advance_frame(self.game_state.position)
 
     def _close_port_modal(self) -> None:
         """Notice that the player launched: the modal is gone, the market is not.
@@ -320,12 +402,12 @@ class GameScene(Scene):
             self.screen_flash.begin(self.jumps.params.transition_frames)
             self._manager.audio.play_thunderclap()
         elif event.kind == EVENT_ARRIVED:
-            # Stage 10's NPC despawn hooks in here too: every ship in the system
-            # the player just left is gone, and the new system rolls its own.
             self.tactical.notify_system_changed(event.system)
-            # Entering a system also deals its job market. The draw happens even if
-            # the player never lands: the market belongs to the system, not to the
-            # spaceport screen, and re-entering this system later deals a new one.
+            # Entering a system deals everything the visit consists of: its job
+            # market and its fleet. The roll happens even if the player never
+            # lands, and the old encounter object is dropped here — which is the
+            # despawn rule, not a cleanup nicety. Ships do not follow the player
+            # through the gate, and the new system's traffic is a fresh roll.
             self._enter_system(event.system)
         elif event.kind == EVENT_JUMP_ENDED:
             self.tactical.input.unlock_input()
@@ -348,6 +430,14 @@ class GameScene(Scene):
         self.hud.credits = self.game_state.credits
         self.hud.cargo_used = self.game_state.cargo_used
         self.hud.passengers_used = self.game_state.passengers_used
+        # The fleet is published to both renderers at draw time, for the same
+        # reason the nav line is: it is *shared* state rather than an owned view,
+        # and a draw-time sync guarantees both the hulls in the game view and the
+        # contacts on the minimap are looking at the same ships in the same
+        # places. Two sync points for one list is how a minimap ends up a frame
+        # behind a hull.
+        self.tactical.encounter = self.encounter
+        self.hud.contacts = self.encounter.ships
         self.tactical.draw(surface)
         self.hud.draw(surface)
         self.screen_flash.draw(surface)

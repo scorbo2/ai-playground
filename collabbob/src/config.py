@@ -14,6 +14,7 @@ from typing import List, Optional
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
 from src.map_systems.graph import NATO_SYSTEMS
+from src.model.encounter import SpawnRules
 
 # Directory holding the main.py shim (the game root), resolved from this
 # module's location so the config files are always found relative to the
@@ -209,6 +210,40 @@ class _CombatConfig(_ConfigModel):
     localhoster_bounty: int
 
 
+class _NpcConfig(_ConfigModel):
+    """Traffic patterns and NPC hulls.
+
+    The range rules are not re-derived here: they are delegated to
+    :class:`src.model.encounter.SpawnRules`, the very object the spawner runs on,
+    so a rule cannot be enforced by the loader and quietly relaxed by the model
+    (or the other way round) without somebody noticing.
+    """
+
+    spawn_chance_near: float
+    spawn_chance_far: float
+    ships_min: int
+    ships_max: int
+    stat_multiple: float
+    stat_variance: float
+    aim_jitter_degrees: float
+    engage_range_fraction: float
+    min_distance_from_player: int
+
+    @model_validator(mode="after")
+    def _check_spawn_rules_are_usable(self) -> "_NpcConfig":
+        """Reject an ``npc`` section the spawner could not honour, at startup.
+
+        ``from_config`` is the exact call the spawner makes at runtime, so the
+        loader and the model cannot drift: a config that loads is a config the
+        encounter code accepts, by construction.
+        """
+        try:
+            SpawnRules.from_config(self.model_dump())
+        except ValueError as exc:
+            raise ValueError(f"npc section is unusable: {exc}") from exc
+        return self
+
+
 class _EconomyConfig(_ConfigModel):
     win_credits: int
     fuel_cost_per_unit: float
@@ -344,8 +379,30 @@ class ConfigRoot(_ConfigModel):
     upgrade_steps: _UpgradeStepConfig
     tactical: _TacticalConfig
     combat: _CombatConfig
+    npc: _NpcConfig
     economy: _EconomyConfig
     map: _MapConfig
+
+    @model_validator(mode="after")
+    def _check_npc_spawn_room(self) -> "ConfigRoot":
+        """The player-clearance radius must be a radius the system actually has.
+
+        Spawning re-rolls a position until it sits at least
+        ``npc.min_distance_from_player`` from the player. Ask for more than the
+        system's own width and every candidate is rejected, so the spawner burns
+        its whole rejection budget on every single ship and the knob stops
+        meaning anything. That is a data error, so it is reported here rather
+        than at the first jump into the first hostile system.
+        """
+        system_size = self.tactical.system_pixel_size
+        if self.npc.min_distance_from_player > system_size:
+            raise ValueError(
+                "npc.min_distance_from_player "
+                f"({self.npc.min_distance_from_player}) cannot exceed "
+                f"tactical.system_pixel_size ({system_size}): no point in the "
+                "system could ever satisfy it"
+            )
+        return self
 
 
 def base_config() -> dict:
@@ -404,6 +461,17 @@ def base_config() -> dict:
             "pirate_bounty": 10000,
             "bobber_bounty": 5000,
             "localhoster_bounty": 5000,
+        },
+        "npc": {
+            "spawn_chance_near": 0.1,
+            "spawn_chance_far": 0.7,
+            "ships_min": 1,
+            "ships_max": 4,
+            "stat_multiple": 4.0,
+            "stat_variance": 0.5,
+            "aim_jitter_degrees": 4.0,
+            "engage_range_fraction": 0.75,
+            "min_distance_from_player": 350,
         },
         "economy": {
             "win_credits": 1000000,

@@ -24,6 +24,7 @@ import math
 import random as _random_lib
 from dataclasses import dataclass
 
+from src.model import physics
 from src.model.stats import ShipStats, ship_stats_from_config
 from src.model.economy import (
     CarriedLoad,
@@ -95,6 +96,14 @@ class GameState:
         self.rng = rng or _random_lib.Random()
         # Starting stats are fixed for the whole game; combat uses these.
         self.stats = ship_stats_from_config(configs["player_ship"])
+        # A second, never-mutated snapshot of the same numbers. Upgrades mutate
+        # ``stats`` in place, and the spec pins NPC hulls to the *starting*
+        # values ("Always use the STARTING stats for these calculations, not the
+        # current stats, with upgrades that the player has purchased"), which
+        # needs a copy that cannot drift. Keeping both on the game state is what
+        # stops Stage 11/14 from re-deriving "starting" by reading the config
+        # again somewhere else and getting a third answer.
+        self.starting_stats = ship_stats_from_config(configs["player_ship"])
         # Fuel burn is a tactical-mode concern, not a ship stat.
         self.fuel_burn_per_frame: float = float(
             configs["tactical"]["fuel_burn_per_frame"]
@@ -708,26 +717,16 @@ class GameState:
         """Apply ``acceleration`` in the facing direction, capped at ``speed_cap``.
 
         ``speed_cap`` is ``None`` for the hyperspace burn, which the spec lets
-        exceed the ship's usual top speed.
+        exceed the ship's usual top speed. The maths itself lives in
+        :mod:`src.model.physics` so an NPC and the player cannot disagree about
+        what "top speed" means.
         """
-        accel = float(acceleration)
-        vx, vy = self._velocity
-        speed = math.hypot(vx, vy)
-        if speed_cap is not None and speed >= speed_cap:
-            return  # already capped; adding would only introduce float wobble
-
-        ax = accel * math.cos(math.radians(self.heading))
-        ay = accel * math.sin(math.radians(self.heading))
-        new_vx = vx + ax
-        new_vy = vy + ay
-        new_speed = math.hypot(new_vx, new_vy)
-        if speed_cap is not None and new_speed > speed_cap:
-            # Rescale so the speed lands exactly on top_speed rather than
-            # overshooting it by a hair.
-            scale = speed_cap / new_speed
-            self._velocity = (new_vx * scale, new_vy * scale)
-        else:
-            self._velocity = (new_vx, new_vy)
+        self._velocity = physics.apply_thrust(
+            self._velocity,
+            physics.unit_from_heading_degrees(self.heading),
+            acceleration,
+            speed_cap,
+        )
 
     def _consume_fuel(self) -> None:
         """Burn fuel for one frame of thrusting; never below zero."""
@@ -737,10 +736,7 @@ class GameState:
 
     def _integrate_position(self, clamp_to_system: bool) -> None:
         """Newtonian drift: position advances by the current velocity."""
-        self._position = (
-            self._position[0] + self._velocity[0],
-            self._position[1] + self._velocity[1],
-        )
+        self._position = physics.integrate(self._position, self._velocity)
         if clamp_to_system:
             self._clamp_to_system()
 
@@ -749,23 +745,17 @@ class GameState:
 
         The spec's rule is positional ("cannot move any further in that
         direction") while still allowing thrust and fuel burn against the wall.
-        Zeroing the velocity component through the wall is what makes that
-        behave: otherwise a ship pinned for ten seconds accumulates a decade of
-        outward drift and slingshots away the instant it turns around. The
-        rejected alternative (leave velocity alone) is cheaper but wrong.
+        :func:`src.model.physics.clamp_to_square` implements that (including why
+        the outward velocity is zeroed rather than kept), and the NPC fleet uses
+        the same function, so "the edge of the system" is one definition.
         """
         half = self.system_pixel_size / 2.0
-        x, y = self._position
-        vx, vy = self._velocity
-        clamped_x = min(max(x, -half), half)
-        clamped_y = min(max(y, -half), half)
-        if clamped_x != x:
-            vx = 0.0
-        if clamped_y != y:
-            vy = 0.0
-        if (clamped_x, clamped_y) != (x, y):
-            self._position = (clamped_x, clamped_y)
-            self._velocity = (vx, vy)
+        position, velocity, clamped = physics.clamp_to_square(
+            self._position, self._velocity, half
+        )
+        if clamped:
+            self._position = position
+            self._velocity = velocity
             self._boundary_reached_this_frame = True
 
     # ------------------------------------------------------------------
@@ -773,7 +763,16 @@ class GameState:
     # ------------------------------------------------------------------
     def facing_vector(self) -> tuple[float, float]:
         """Unit vector pointing in the ship's current facing direction."""
-        return (math.cos(math.radians(self.heading)), math.sin(math.radians(self.heading)))
+        return physics.unit_from_heading_degrees(self.heading)
+
+    @property
+    def hitbox_radius(self) -> float:
+        """Radius of the spec's circular hitbox: half the ship's longest axis.
+
+        The same rule the NPC hulls use, so Stage 11's collision test is one
+        function for every ship rather than one per side of the fight.
+        """
+        return max(self.stats.length, self.stats.width) / 2.0
 
     def distance_from_point(self, x: float, y: float) -> float:
         """Euclidean distance from the ship to a world coordinate."""

@@ -53,8 +53,22 @@ from src.hud import (
     to_screen_layout,
     _HudPalette,
 )
+from src.model.factions import FACTION_PIRATE, faction_color
 from src.model.game_state import GameState
 from src.overlays import MessageOverlay
+
+
+class _Contact:
+    """The slice of a Stage 10 NPC ship the HUD is allowed to read.
+
+    The minimap only ever asks a contact for its world position and its faction,
+    so a test hands it exactly that. Handing it a real ``NpcShip`` would couple
+    the Stage 6 layout tests to the NPC model's constructor.
+    """
+
+    def __init__(self, position, faction=FACTION_PIRATE):
+        self.position = position
+        self.faction = faction
 
 
 # ---------------------------------------------------------------------------
@@ -668,13 +682,18 @@ def test_minimap_ship_marker_is_always_visible_even_when_the_planet_is_off_map()
 
 
 def test_minimap_draws_hostile_contacts_as_red_2x2_squares():
-    """Spec: hostile ships are red 2x2 squares, positioned relative to the player."""
+    """Spec: hostile ships are red 2x2 squares, positioned relative to the player.
+
+    The red is the Pirate faction colour, not a HUD-owned colour: from Stage 10
+    on, a contact's colour *is* its faction, so the minimap answers "who is out
+    there" as well as "how many".
+    """
     view, surface = _make_hud_view(position=(200.0, 0.0))
-    view.enemies = [(400.0, 0.0)]
+    view.contacts = [_Contact((400.0, 0.0))]
     view.draw(surface)
 
     rect = view._rects["minimap"]
-    contacts = _pixels_in(surface, _HudPalette.enemy, rect)
+    contacts = _pixels_in(surface, faction_color(FACTION_PIRATE), rect)
     assert len(contacts) == 4, f"expected a red 2x2 contact marker, got {len(contacts)} px"
 
     centre_x = rect.left + rect.width / 2.0
@@ -685,11 +704,11 @@ def test_minimap_draws_hostile_contacts_as_red_2x2_squares():
 def test_minimap_culls_contacts_that_are_off_map():
     """Off-map contacts need no marker (the spec's arrow is for the planet)."""
     view, surface = _make_hud_view(position=(0.0, 0.0))
-    view.enemies = [(100000.0, 0.0)]
+    view.contacts = [_Contact((100000.0, 0.0))]
     view.draw(surface)
 
     rect = view._rects["minimap"]
-    assert not _pixels_in(surface, _HudPalette.enemy, rect)
+    assert not _pixels_in(surface, faction_color(FACTION_PIRATE), rect)
 
 
 def test_landing_prompt_is_drawn_over_the_game_view_within_landing_range():

@@ -107,6 +107,18 @@ timestep. There is no fullscreen option.
   ship and shows "System boundary reached" (at most once every
   `tactical.boundary_warnings.cooldown_frames` frames). The one exception is a
   jump: once you are burning, the boundary no longer applies.
+- Other ships live in the system you have just flown into. Arriving somewhere
+  new rolls its traffic: Alpha is always empty (the starting system is safe), and
+  everywhere else the chance rises with the system's *name* — Bravo is the
+  quietest system with traffic, Zulu the busiest, whatever the map looks like.
+  A fleet belongs to the visit: land, launch, and land again and the same ships
+  are still out there; jump out and come back and a new lot is waiting. They are
+  painted in their faction's colour — cyan Localhoster (arrow), yellow Bobber
+  (saucer), red Pirate (raider) — and the same colours mark them on the minimap.
+  Pirates attack everyone, including each other's allies; Localhosters and
+  Bobbers are at war with each other and leave you alone until you do something
+  about it. Nobody can shoot you yet — Stage 11 adds the projectiles — but they
+  already fly at you, so you will see a fleet close to gun range and sit there.
 - Land with `L` at a planet to reach the spaceport, accept cargo/passenger
   contracts and ship upgrades, top up fuel and armour, then leave with `Launch!`
   or `ESC`.
@@ -232,6 +244,84 @@ supposed to fly to the planet), and `spawn_distance[1]` must stay within half of
 `tactical.system_pixel_size` (you are not supposed to arrive outside the system
 you just paid to reach).
 
+### Traffic and factions (`npc`)
+
+The `npc` block decides who is orbiting a system when you arrive:
+
+```json
+"npc": {
+  "spawn_chance_near": 0.1,
+  "spawn_chance_far": 0.7,
+  "ships_min": 1,
+  "ships_max": 4,
+  "stat_multiple": 4.0,
+  "stat_variance": 0.5,
+  "aim_jitter_degrees": 4.0,
+  "engage_range_fraction": 0.75,
+  "min_distance_from_player": 350
+}
+```
+
+- `spawn_chance_near` / `spawn_chance_far` — the chance that a visit spawns any
+  traffic at all, at the first system after Alpha and at the last one in play.
+  The chance ramps linearly between those two across the systems **in play**, by
+  name index, so shrinking `map.system_count` moves the top of the ramp instead
+  of stranding it past the end of the roster. Alpha is always 0%: no value in
+  this file can make the starting system dangerous.
+- `ships_min` / `ships_max` — how many ships a successful roll produces (the spec's
+  "1 to 4"). Rolled once per visit, not once per ship: a system either has traffic
+  or it does not.
+- `stat_multiple` / `stat_variance` — an NPC's shields, armour and weapon power
+  are the player's **starting** values times the multiple, plus or minus the
+  variance. With the medium defaults (50 shields / 100 armour / power 10, 4.0 and
+  0.5) a hull arrives with 100–300 shields, 200–600 armour and 20–60 damage. The
+  galaxy does not rescale when you upgrade: a pirate is always measured against
+  the ship you *started* with.
+- `weapon_fire_rate` and `weapon_range` are not in this block — an NPC's gun is
+  the player's starting gun, straight from `player_ship`, per the spec.
+- `aim_jitter_degrees` — how badly they shoot. The shot leaves along the true
+  bearing to the target, deflected by up to this many degrees. The hull itself
+  still points at you, so the aim is honest and the accuracy is not.
+- `engage_range_fraction` — how close a ship comes before it stops closing, as a
+  fraction of its own gun range. It must be in `(0, 1]`: above 1 a fleet would
+  stop outside its own guns and never fire at all. (0.75 is 900px on medium, and
+  see the visibility gotcha below.)
+- `min_distance_from_player` — spawn positions are re-rolled until they are at
+  least this many pixels from you, so an arrival is not instantly down the barrel
+  of someone who can see you from across the system.
+
+The shipped values, and what each difficulty is really doing:
+
+| key | Easy | Medium | Hard |
+| --- | --- | --- | --- |
+| `spawn_chance_near` → `spawn_chance_far` | 0.05 → 0.45 | 0.10 → 0.70 | 0.25 → 0.95 |
+| `ships_min` / `ships_max` | 1 / 3 | 1 / 4 | 1 / 4 |
+| `stat_multiple` ± `stat_variance` | 3.0 ± 0.4 | 4.0 ± 0.5 | 5.0 ± 0.5 |
+| `aim_jitter_degrees` | 6.0 | 4.0 | 2.0 |
+| `engage_range_fraction` | 0.65 | 0.75 | 0.85 |
+| `min_distance_from_player` | 400 | 350 | 300 |
+
+Because an NPC's gun *is* the player's starting gun, an NPC's damage per second
+is always `stat_multiple` times what the player started with — that ratio is the
+same fight everywhere. The difficulty comes from how often traffic appears, how
+many ships, how tough the hulls are, and how tightly and accurately they crowd
+in, not from their rate of fire.
+
+Two gotchas for anyone retuning this block:
+
+- **The band has to fit inside the system.** `engage_range_fraction ×
+  player_ship.weapon_range` is the radius a ship parks at. Make it bigger than
+  half of `tactical.system_pixel_size` and there is not enough universe: the whole
+  fleet presses itself against the system boundary instead of holding its band.
+  Nothing crashes, which is why this is checked by a test
+  (`testshippedConfigs_engagementBandsShouldFitInsideTheirOwnSystems`) rather than
+  being fatal at startup.
+- **The band is wider than the view.** The game view is 683x768 and a medium-band
+  ship sits 900px out, so a fleet holding its band is visible on the minimap and
+  not on the screen. That is a Stage 11 problem (it arrives with the projectiles
+  that will be flying in from off-screen); shrinking `engage_range_fraction` is
+  the blunt version of the fix.
+
 ### Economy: contracts, upgrades, and port services
 
 The `economy` block prices everything the spaceport sells:
@@ -348,6 +438,33 @@ stream (starfield, arrival bearing) is a separate generator seeded from it, and
 neither is touched by wall-clock time. So the same command always reproduces the
 same pictures byte for byte — handy when a tweak to `acceleration` or
 `transition_frames` needs comparing side by side.
+
+### Seeing the traffic
+
+Three hull designs and a steering law are hard to review in a diff, so one sheet
+(`stage10_npc_fleet.png`) carries the whole story:
+
+![NPC traffic: an empty Alpha, a rolled fleet on the minimap, a pirate closing in, a fleet holding its band, three hulls up close, nobody during hyperspace](stage10_npc_fleet.png)
+
+Left to right, top to bottom: Alpha with nothing in it (always empty, whatever the
+config says); a freshly jumped-into system with a fleet that exists but is too far
+away to see — the minimap is where the traffic lives at range; a pirate entering
+the view from the left edge (and being clipped at the edge, not painted over the
+HUD); the same fleet settled onto its engagement band, each ship exactly at
+`engage_range_fraction` of its gun range; the three silhouettes up close (yellow
+Bobber saucer, red Pirate raider, cyan Localhoster arrow); and hyperspace, where
+the ships are hidden for the same reason the player is.
+
+```bash
+python scripts/capture_npc_fleet.py --sheet stage10_npc_fleet.png  # one sheet
+python scripts/capture_npc_fleet.py npc_frames                    # individual frames
+```
+
+The script hand-places one ship per faction and pins both RNG streams, so the
+same command reproduces the same pictures byte for byte. It also narrows
+`player_ship.weapon_range` to 400 so the whole engagement fits inside the 683px
+view — on the shipped tuning the band is 900px and the fleet is only ever visible
+on the minimap.
 
 ## Tests
 

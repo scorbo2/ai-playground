@@ -888,3 +888,231 @@ loophole with a docstring. Superseded below.)
   `_SpyAudio` grew `play_jump_spinup`/`play_thunderclap`: a scene-level test that
   flies a jump must not trip over the Stage 8 audio calls it never meant to
   exercise.
+
+## Stage 10 — NPCs, factions, and the AI that flies them
+
+- **Six new modules, and what each one is allowed to know.**
+  `src/model/physics.py` (pure 2D movement: thrust, drift, turning, the system
+  boundary), `src/model/factions.py` (the hostility matrix, the engageability
+  filter, the session's `PlayerRelations`), `src/model/weapons.py` (a `Shot`
+  record and the rate→cooldown conversion), `src/model/npc_ship.py` (a hull: stats,
+  a gun, damage), `src/model/ai.py` (one ship's one frame: face, close, aim,
+  trigger), `src/model/encounter.py` (who is in the system, and the fleet's single
+  `advance_frame`). The dependency line runs one way —
+  `physics ← factions ← weapons ← npc_ship ← ai ← encounter` — and `encounter` is
+  the only module `GameScene` talks to. The AI cannot spawn a ship; the spawner
+  cannot steer one; neither knows projectiles exist.
+
+- **A fleet belongs to one system visit.** `GameScene._enter_system` now deals
+  *both* the market and the traffic, from the same entry serial but different RNG
+  namespaces (`port_rng` / `encounter_rng`). Dropping the old `Encounter` there
+  **is** the spec's despawn rule: ships do not respawn, do not persist, and a jump
+  out and back "does not remember the quantity or types of ships". Landing and
+  launching deliberately do **not** re-roll: parking in orbit to make a pirate
+  disappear is the same free lunch Stage 9 closed for the job board. During
+  hyperspace the fleet is not simulated at all (`_advance_encounter` skips while
+  `jumps.is_active`) — those frames are between two systems, and the fleet is
+  garbage at the far end anyway. **Stage 11 note: projectiles must be cleared at
+  the same boundary.** The ships that fired them stop existing on arrival; a
+  missile that outlives its shooter is a ghost.
+
+- **Pirates are hostile to everyone — including other pirates — but they never
+  shoot each other.** Two functions, on purpose. `factions_are_hostile` is the
+  matrix straight from the spec (Pirate vs everything: hostile; Localhoster ↔
+  Bobber: mutually hostile; everything else: not). `factions_can_engage` narrows
+  that to "hostile *and* a different faction", and it is what target selection
+  uses. Without it a pair of pirates 20px apart would spend the entire encounter
+  trading harmless shots with each other while the freighter they can actually
+  hurt sails past. Keeping both questions answerable also keeps the matrix honest:
+  Stage 12's "who is shooting at me" indicator wants the matrix, not the
+  gun-law.
+
+- **The player's grudge is per-session, not per-system.** `PlayerRelations` lives
+  on `GameScene` and is handed to every `Encounter`, so a Localhoster you shot in
+  Alpha is hostile in Zulu too — the spec says hostility, once earned, is
+  permanent, and a per-system relations object would grant amnesia on every jump.
+  Nothing in Stage 10 can *cause* a grudge, because nothing can shoot anything
+  yet: Stage 11 calls `declare_hostile_to_player(faction)` the moment a projectile
+  lands. Pirates are hostile to the player from frame one regardless, which is the
+  only reason a pirate ever chases the player before being hit.
+
+- **NPC hulls are the player's *starting* ship × the config multiple.**
+  `GameState.starting_stats` is a separate immutable snapshot taken at
+  construction, and `roll_npc_stats` works from it. A system that scales with the
+  player's *current* hull would quietly rescale the galaxy on every upgrade, so
+  "buy Engine Mk.IV" would make the next pirate bigger than the last one. The gun
+  (`weapon_fire_rate`, `weapon_range`) is copied verbatim from the starting ship
+  because the spec says so ("firing rate and projectile range equal to the
+  player's starting stats"). Handling — turn rate, acceleration, top speed,
+  `length`, `width` — is not named by the spec and follows the same anchor: it is
+  what makes "other ships are roughly the same size as the player's ship" a
+  consequence rather than a coincidence, and it is what lets the Stage 3 physics
+  gate ("60 frames of thrust from rest reaches exactly top speed") be asserted
+  about an NPC as well as the player.
+
+- **NPC fuel is not modelled at all.** "Unlimited fuel" is the *absence* of a
+  field, not a field set to a big number: an `NpcShip.fuel` would be state that
+  can drift out of sync with the rule it claims to express, and "cannot initiate
+  jumps" would need a guard nobody can reach. The test asserts the absence of
+  `fuel`, `fuel_capacity`, and any `*_jump` method on both `NpcShip` and
+  `NpcStats`, which is the only way it stays absent.
+
+- **Physics moved into its own module so the player and the AI cannot disagree.**
+  `GameState` had already grown `facing_vector`, `_apply_thrust`,
+  `_integrate_position` and `_clamp_to_system`; those are now thin delegations to
+  `src/model/physics.py`, and the NPC hull uses the same functions. Two rules that
+  must not have two answers: what "top speed" means, and where the system boundary
+  is (`clamp_to_square` zeroes the velocity component that pointed through the
+  wall, so an NPC pressed against the edge cannot slingshot).
+
+- **The engagement band, and why the AI must start braking before it gets there.**
+  `AiTuning.band_for(weapon_range)` = `engage_range_fraction` × the ship's own gun
+  range. Not the range itself: a ship parked exactly on the range circle is one
+  float wobble away from deciding its gun is out of range, and the fraction is the
+  knob that sets how tightly the fleet crowds in. `choose_motion` is three lines
+  (chase / brake / coast) whose middle case is the whole design: at the fixed
+  timestep a ship at `v` needs `v²/2a` pixels to stop, so the retrograde burn
+  starts that far *outside* the band and the ship arrives standing still.
+  This was not a refinement, it was a bug fix. The first implementation burned
+  toward the target until it was inside the band, then stopped *thrusting* — and
+  inertia carried it straight through the player, out the other side, and back
+  again: measured distances of 0px to 1000px, oscillating forever, which on screen
+  is a swarm of flies around the player's cockpit. Two things had to change:
+  1. **`apply_thrust` cannot be used to brake.** It ignores thrust entirely once a
+     ship sits at its speed cap — correct for the player ("the throttle is already
+     hard down") — which made a retrograde burn at top speed a *no-op*, so a ship
+     chasing at 5px/frame could never slow down at all.
+  2. **Braking is its own instruction, not a burn vector.** `physics.brake`
+     reduces speed by at most the speed that is left. A plain thrust step larger
+     than the remaining speed flips the velocity through zero and the ship
+     oscillates around a standstill forever (measured: still drifting at
+     0.07px/frame after four seconds of "holding position"). `ShipOrder` therefore
+     carries `burn` *and* `brake`, and a brake and a burn are mutually exclusive.
+
+- **"No hostiles: hold position" is an engine burn, not an idle.** There is no
+  drag in this universe, so a ship with drift holds position by decelerating:
+  4.47px/frame of drift costs its own braking distance (v²/2a = 50px) and then
+  exactly zero. A ship that merely stopped thrusting would have crossed the system
+  (1,073px in four seconds) while the AI believed it was holding station.
+
+- **Every ship picks its target from the frame's opening snapshot.**
+  `Encounter.advance_frame` plans for the whole fleet, then applies the plans.
+  Interleaving decide/move would make a ship's target depend on whether its
+  neighbour happened to be earlier in the list — spawn-order-dependent behaviour,
+  which is the class of bug that survives every test containing exactly one ship.
+  The test for this is worth stealing: the Bobber starts facing 45°, exactly
+  halfway between two candidates, so a single 3° turn step reveals which one it
+  was looking at when the frame opened (42° = the one it chose, 48° = the one a
+  decide-after-moving implementation would have picked).
+
+- **The spawn-chance ramp spans the systems *in play*, and the first denominator
+  was wrong.** `spawn_chance_for_system` interpolates from
+  `spawn_chance_near` at the first system after Alpha to `spawn_chance_far` at the
+  last system in the roster, index-wise: `(index - 1) / (last_index - 1)`. The
+  first version divided by `last_index`, which looked plausible and meant Zulu drew
+  0.676 on a config that said 0.7 — the configured maximum was stranded one system
+  past the end of the roster, unreachable forever. `map.system_count` shrinking
+  moves the top of the ramp, which is what a Stage 14 sweep would poke. Edge case,
+  documented in the code: with only Alpha and one other system there is nothing to
+  ramp across, so that system gets the *near* chance; and Alpha's 0% is
+  unconditional — no config value can make the starting system dangerous.
+
+- **One coin flip per fleet; spawn positions are rejection-sampled for player
+  clearance.** The spec says "a random number of between 1 and 4 ships", not "each
+  ship appears with probability p", so `spawn_chance_for_system` is rolled once and
+  `ships_min..ships_max` is drawn on success. Positions are re-rolled (up to
+  `_SPAWN_REJECTION_LIMIT = 24` attempts) until they clear
+  `npc.min_distance_from_player` from the player, then accepted as-is: the spec
+  says only "random positions", and the clearance exists so an arrival is not
+  instantly inside someone's guns before the player can see the minimap. The
+  bounded budget is what stops an impossible clearance (or a tiny system) from
+  looping. Because "impossible" is a data error rather than a play condition, the
+  loader cross-checks `npc.min_distance_from_player <= tactical.system_pixel_size`
+  and refuses to start.
+
+- **Config validation is delegated to the object the spawner actually runs on —
+  and that sentence hid a bug.** `config._NpcConfig` has no range checks of its
+  own; its `model_validator` builds a `SpawnRules` and lets *it* complain, so the
+  loader and the model cannot drift. It did not work: `SpawnRules` is a frozen
+  dataclass whose checks lived in `check()`, which `from_config` called and the
+  validator did not — so nine parametrised "impossible npc config is fatal at
+  startup" tests reported `DID NOT RAISE`. Fixed by moving the call into
+  `__post_init__`: an invalid `SpawnRules` object can now not exist at all, from
+  the loader, from a test, or from a future save-file reader. Recorded because
+  "validation delegated to the model" is only a good idea if the model actually
+  validates on construction.
+
+- **What each difficulty actually changes.** easy 5%→45% chance, 1–3 ships, 3.0×
+  hull, 6° jitter, band 0.65; medium 10%→70%, 1–4, 4.0×, 4°, 0.75; hard
+  25%→95%, 1–4, 5.0×, 2°, 0.9. Because an NPC's gun *is* the player's starting
+  gun, NPC damage-per-second is `stat_multiple` × the player's own starting DPS in
+  every difficulty — so the curve comes from how often traffic appears, how many
+  ships, how tough the hull is, and how tightly and accurately they crowd in, not
+  from their rate of fire. `engage_range_fraction` also has a constraint the
+  loader deliberately does not enforce: the band must fit inside the system. The
+  first tuning used 0.85 everywhere, which on easy is 1275px around the player in
+  a system whose half-width is 1100 — every ship in every encounter would park
+  against the system boundary rather than hold its band. Nothing crashes, which is
+  exactly why it is pinned by a test
+  (`testshippedConfigs_engagementBandsShouldFitInsideTheirOwnSystems`) instead of
+  by a startup check that would refuse a playable configuration. The related
+  visibility question is left open deliberately: the game view is 683x768, so a
+  medium-band ship parked 900px out is drawn nowhere at all — the player sees the
+  fleet on the minimap only. Shrinking the band would fix the sightline and undo
+  the gun range, so the real answer belongs to Stage 11 (off-screen contact
+  indicators, or projectiles that visibly come from outside the view). Flagged in
+  the README and here so Stage 11 does not "discover" it mid-combat.
+
+- **Faction colour is model data; the HUD no longer owns a private red.**
+  `factions.py` carries `FACTION_COLORS`, used by the tactical hulls, the minimap
+  markers, and (Stage 11) the projectiles, so a faction cannot be one colour in the
+  view and another on the map. `HudView.enemies` (a list of `(x, y)` tuples with a
+  hard-coded hostile red) became `HudView.contacts` (anything exposing `.position`
+  and `.faction`) — one list published once per frame from `GameScene.draw()` to
+  both renderers. `tests/test_stage6.py` was updated to match; the Stage 6
+  minimap tests still assert positions, now against a colour that comes from the
+  model.
+
+- **Three silhouettes, drawn procedurally, and painted under the player.** Arrow
+  (Localhoster), flying saucer with a dome (Bobber), forward-swept pronged raider
+  (Pirate) — polygon/ellipse code, no image assets, sized from the player's
+  *starting* `length`/`width` and cached once per faction per view (rotating a
+  cached surface at 60Hz is cheap; redrawing polygons per ship per frame is not).
+  Drawn *before* the player's hull because ships pass through each other in this
+  model, so the only question a pixel collision raises is who wins it, and it must
+  be the ship the player is steering. The blit is clipped to the game-view rect: a
+  hull half off the left edge would otherwise be painted across the HUD column,
+  since `blit` is not region-clipped by itself. Contacts are hidden during the
+  white-out for the same reason the player is — during hyperspace nobody is in
+  this universe — and culled when off-screen, because a 2000px system in a 683px
+  view is mostly empty on any given frame.
+
+- **`Shot` is the Stage 11 seam, and there is exactly one cooldown clock.** The AI
+  decides *whether the trigger is held*; `NpcShip._release_shot` decides whether
+  the gun can honour that this frame, because the cooldown is the gun's state. Two
+  owners of the fire rate means two clocks and a ship that shoots at double its
+  configured rate. A `Shot` carries faction, owner, origin, aim direction, the
+  shooter's velocity (so a projectile inherits the ship's motion, as the spec's
+  "projectiles retain the ship's velocity" wants), weapon power and weapon range —
+  everything Stage 11 needs to make a projectile without asking the AI anything.
+  `GameScene.pending_shots` is replaced every frame and emptied during hyperspace;
+  it is deliberately not consumed by Stage 10.
+
+- **One gotcha for whoever writes the next scene-level test.** The input layer is
+  edge-triggered and `KEYUP` discards a rising edge that has not been drained yet,
+  so `press(J)` + `release(J)` inside one frame is not a tap, it is *nothing*.
+  Worse, a `KEYDOWN` that is never released leaves the key held, so a second press
+  in the same scene is not a rising edge and a two-hop jump test fails looking like
+  the jump controller is broken. `tests/test_stage10.py::jump()` does it in the
+  order reality forces: press → `update()` (drains the edge) → release → run to
+  arrival, and raises if the scene never got there.
+
+- **A picture of the whole stage.** `scripts/capture_npc_fleet.py` (same shape as
+  the Stage 8/9 capture scripts) hand-places one ship per faction, runs the
+  encounter, and emits `stage10_npc_fleet.png`: empty Alpha, a rolled fleet that
+  is real but off-screen (minimap dots only), a pirate entering the view at the
+  left edge, the fleet settled exactly on its band, the three silhouettes up
+  close, and hyperspace with nobody in it. It narrows `weapon_range` to 400 so the
+  engagement fits in the view — see the visibility note above. Hand-placed rather
+  than rolled on purpose: if the fleet were rolled, every future change to the
+  spawn rules would change the pictures, which is the opposite of a visual diff.

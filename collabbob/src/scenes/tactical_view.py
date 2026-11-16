@@ -22,6 +22,12 @@ from src.camera import world_to_screen
 from src.effects import WarpTunnel
 from src.hud import VIEW_WIDTH, landing_prompt_text
 from src.input import Action, InputLayer
+from src.model.factions import (
+    FACTION_BOBBER,
+    FACTION_LOCALHOSTER,
+    FACTION_PIRATE,
+    faction_color,
+)
 from src.model.game_state import PLANET_WORLD_POSITION, GameState
 from src.model.jump import JumpPresentation, PHASE_BURN, PHASE_TRANSITION
 from src.model.starfield import Starfield
@@ -54,6 +60,97 @@ _STREAK_CULL_MARGIN = _MAX_STAR_STREAK
 # "System boundary reached" is pure copy, so it lives next to the code that
 # shows it; its durations come from tactical.boundary_warnings in config.
 BOUNDARY_WARNING_TEXT = "System boundary reached"
+
+# NPC hull silhouettes are drawn from the faction's own colour, with a darker
+# shade for the interior detail so the shape reads at 40 pixels instead of as a
+# coloured smudge.
+_HULL_SHADE = 0.55
+
+
+def _shaded(color: "tuple[int, int, int]", factor: float = _HULL_SHADE) -> "tuple[int, int, int]":
+    """A darker version of a colour, for the interior detail of a hull."""
+    return tuple(int(round(channel * factor)) for channel in color)  # type: ignore[return-value]
+
+
+def localhoster_polygon(length: int, width: int) -> "tuple[tuple[int, int], ...]":
+    """Long and angular, like an arrow: the nose leads, the body tapers behind.
+
+    Vertices are in surface coordinates (x grows toward the nose, y is down), so
+    the polygon must be built for the unrotated surface and rotated with it.
+    """
+    mid_y = width // 2
+    return (
+        (length - 1, mid_y),           # nose, dead ahead
+        (length // 4, 0),              # upper shoulder
+        (0, 0),                        # upper tail
+        (length // 2, mid_y),          # swept-in belly
+        (0, width - 1),                # lower tail
+        (length // 4, width - 1),      # lower shoulder
+    )
+
+
+def bobber_ellipses(length: int, width: int) -> "tuple[tuple[int, int, int, int], ...]":
+    """A rounded flying saucer: a wide hull ellipse plus a smaller dome.
+
+    Rect-based so the shape stays a saucer at any size the config asks for, and
+    the dome sits forward of centre so the facing is still readable.
+    """
+    dome_w = max(4, length // 3)
+    dome_h = max(3, width // 3)
+    dome_x = length // 2 - dome_w // 2
+    return (
+        (0, width // 6, length, width * 2 // 3),           # hull
+        (dome_x, 0, dome_w, dome_h * 2),                    # dome, on top of it
+    )
+
+
+def pirate_polygon(length: int, width: int) -> "tuple[tuple[int, int], ...]":
+    """Sharp nose with forward-swept wings: the tips sit *ahead* of the roots.
+
+    Forward-swept means the wing tips are further forward (larger x) than where
+    the wings join the fuselage, which is what makes this silhouette read as
+    "aggressive" against the Localhoster's straight arrow.
+    """
+    mid_y = width // 2
+    return (
+        (length - 1, mid_y),               # sharp nose
+        (int(length * 0.60), 0),           # upper wing tip, forward
+        (int(length * 0.30), int(width * 0.40)),  # upper wing root
+        (0, mid_y),                        # tail
+        (int(length * 0.30), int(width * 0.60)),  # lower wing root
+        (int(length * 0.60), width - 1),   # lower wing tip, forward
+    )
+
+
+def npc_ship_surface(faction: str, length: int, width: int) -> "pygame.Surface":
+    """Procedurally draw one NPC hull, unrotated, nose along +x.
+
+    Same approach as the player's shuttle (Stage 4): no image assets, so the
+    silhouettes scale with whatever ``player_ship.length``/``width`` the config
+    asks for and a missing resource file is not a crash. The three shapes come
+    from the spec's "other ship designs" section.
+    """
+    length = max(4, int(length))
+    width = max(4, int(width))
+    color = faction_color(faction)
+    surface = pygame.Surface((length, width), pygame.SRCALPHA)
+
+    if faction == FACTION_BOBBER:
+        for rect in bobber_ellipses(length, width):
+            pygame.draw.ellipse(surface, color, rect)
+        pygame.draw.ellipse(
+            surface, _shaded(color), (length // 3, width // 4, length // 3, width // 2), 1
+        )
+        return surface
+
+    polygon = (
+        localhoster_polygon(length, width)
+        if faction == FACTION_LOCALHOSTER
+        else pirate_polygon(length, width)
+    )
+    pygame.draw.polygon(surface, color, polygon)
+    pygame.draw.polygon(surface, _shaded(color), polygon, 1)
+    return surface
 
 
 def planet_color_for(system_name: str) -> "tuple[int, int, int]":
@@ -103,6 +200,12 @@ class TacticalView:
         # Which system is being rendered: drives the planet colour, and is set
         # by notify_system_changed() on arrival.
         self.system_name = "Alpha"
+        # The fleet to draw, published by GameScene at draw time. ``None`` only
+        # for a view built standalone (tests, tooling): the scene that owns a
+        # world always publishes an Encounter, and drawing is not allowed to
+        # invent one.
+        self.encounter = None
+        self._npc_surfaces = self._build_npc_surfaces()
         self._boundary_warning_cooldown = 0
         # Cached, unrotated blocky shuttle drawn at the ship's length/width.
         self._ship_surface = self._build_ship_surface()
@@ -239,6 +342,7 @@ class TacticalView:
     def _draw_game_view(self, surface: "pygame.Surface") -> None:
         self._draw_stars(surface)
         self._draw_planet(surface)
+        self._draw_contacts(surface)
         self._draw_ship(surface)
         self._draw_warp_tunnel(surface)
         self.overlays.draw(surface)
@@ -313,6 +417,49 @@ class TacticalView:
         pygame.draw.circle(surface, color, (int(round(screen_pos[0])), int(round(screen_pos[1]))),
                            int(diameter / 2.0))
 
+    def _draw_contacts(self, surface: "pygame.Surface") -> None:
+        """The fleet orbiting this system, each hull in its own faction colour.
+
+        Drawn *before* the player's ship on purpose: ships pass through each other
+        in this model, so the only question a collision of pixels can raise is who
+        wins it, and the answer must always be the hull the player is steering.
+
+        Ships are hidden during the white-out for the same reason the player is
+        (see :meth:`_draw_ship`): during hyperspace nobody is in this universe.
+        Stage 11's projectiles will hang off the same encounter, so they inherit
+        that rule rather than reinventing it.
+
+        Culling is not a performance nicety. A system is ``tactical.system_pixel_size``
+        across and the game view is 683px, so in most frames most of a fleet is off
+        screen; an unculled blit at an arbitrary offset is how a pirate 900px away
+        ends up painted over the HUD column.
+        """
+        if self.encounter is None or not self.jump.ship_visible:
+            return
+        # A hull half off the left edge must not have its other half painted over
+        # the HUD column: `blit` is not clipped to a region by itself, so the
+        # destination surface is clipped to the game view for the duration.
+        surface.set_clip(_GAME_VIEW_RECT)
+        try:
+            for ship in self.encounter.ships:
+                self._draw_one_contact(surface, ship)
+        finally:
+            surface.set_clip(None)
+
+    def _draw_one_contact(self, surface: "pygame.Surface", ship: "NpcShip") -> None:
+        hull = self._npc_surfaces.get(ship.faction)
+        if hull is None:
+            # An unrecognised faction is a bug in the spawner, not a reason to
+            # blank the screen: skip the hull and let the sim say so.
+            return
+        rotated = pygame.transform.rotate(hull, -ship.heading)
+        screen_x, screen_y = world_to_screen(
+            ship.position[0], ship.position[1], self.game_state.position, _VIEW_CENTER
+        )
+        rect = rotated.get_rect(center=(int(round(screen_x)), int(round(screen_y))))
+        if rect.colliderect(_GAME_VIEW_RECT):
+            surface.blit(rotated, rect)
+
     def _draw_ship(self, surface: "pygame.Surface") -> None:
         """The player's ship is always drawn at the centre of the game view.
 
@@ -329,6 +476,24 @@ class TacticalView:
     # ------------------------------------------------------------------
     # Ship sprite construction
     # ------------------------------------------------------------------
+    def _build_npc_surfaces(self) -> "dict[str, pygame.Surface]":
+        """One cached hull per faction, sized from the player's **starting** hull.
+
+        Every NPC rolls its length and width straight from those starting values
+        (the spec wants all ships "roughly the same size as the player's ship"),
+        so one surface per faction covers a whole system's fleet. Built once per
+        view rather than per frame: rotating a cached surface is cheap, redrawing
+        polygons 60 times a second for every hull in the system is not.
+
+        This cache deliberately survives ``notify_system_changed``: hull sizes are
+        per-game constants, so a jump has nothing to rebuild.
+        """
+        starting = self.game_state.starting_stats
+        return {
+            faction: npc_ship_surface(faction, starting.length, starting.width)
+            for faction in (FACTION_LOCALHOSTER, FACTION_BOBBER, FACTION_PIRATE)
+        }
+
     def _build_ship_surface(self) -> "pygame.Surface":
         """Procedurally draw a blocky cargo shuttle centred on its body.
 

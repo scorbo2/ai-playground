@@ -62,6 +62,17 @@
     "bobber_bounty": 8000,
     "localhoster_bounty": 8000
   },
+  "npc": {
+    "spawn_chance_near": 0.05,
+    "spawn_chance_far": 0.45,
+    "ships_min": 1,
+    "ships_max": 3,
+    "stat_multiple": 3.0,
+    "stat_variance": 0.4,
+    "aim_jitter_degrees": 6.0,
+    "engage_range_fraction": 0.65,
+    "min_distance_from_player": 400
+  },
   "economy": {
     "win_credits": 1000000,
     "fuel_cost_per_unit": 1,
