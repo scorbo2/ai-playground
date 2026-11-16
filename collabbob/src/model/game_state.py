@@ -45,6 +45,7 @@ from src.model.ship_upgrades import (
     upgrade_cost,
     upgrade_step_for,
 )
+from src.model.run_stats import RunLedger
 
 # Every system's planet sits at the world origin; see the module docstring for
 # the coordinate convention. Shared with the tactical view so the view and the
@@ -63,6 +64,13 @@ CREDIT_FLOOR = 0.0
 # armour are floats that have been subtracted from floats; a residual of 1e-9
 # should read as full, not as a purchasable sliver.
 _FULL_EPSILON = 1e-9
+
+# ...and the mirror of it for "the tank is empty". `_consume_fuel` clamps at exact
+# 0.0, so an empty tank is exact in practice; the epsilon is for a config whose
+# burn rate leaves a float dusting behind (0.0001/frame across 1000 units does
+# not land on zero). One constant for both the engines' "no thrust" rule and the
+# stranded check, so the two cannot disagree about when the tank is dry.
+EMPTY_TANK_EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -134,6 +142,11 @@ class GameState:
         # Port visits are numbered so that an offer can never be accepted twice,
         # not even across two visits to the same system (see accept_mission).
         self._port_visit_serial: int = 0
+        # Stage 13: the run's bookkeeping, for the end screen. One per game — a
+        # new game builds a new GameState and therefore a clean ledger. It records
+        # only: there is no way to spend or award through it, so a bug in the run
+        # summary can never change the balance.
+        self.ledger = RunLedger()
 
         # Post-spaceport state: while landed the ship takes no damage and cannot
         # be steered; on launch a grace period of immunity begins (the spec's
@@ -204,6 +217,16 @@ class GameState:
     @fuel.setter
     def fuel(self, value: float) -> None:
         self._fuel = max(0.0, float(value))
+
+    def is_out_of_fuel(self) -> bool:
+        """True when the tank holds nothing the engines can burn.
+
+        The single definition of "empty" for this hull: the thrust gate in
+        :meth:`advance_frame` and the stranded rule in :mod:`src.model.endgame`
+        both ask *this*, so a ship can never be grounded by one and still flying
+        for the other.
+        """
+        return self._fuel <= EMPTY_TANK_EPSILON
 
     def set_position(self, x: float, y: float) -> None:
         """Place the ship at world coordinates (used when entering a system)."""
@@ -421,13 +444,21 @@ class GameState:
         if gained:
             self.add_credits(gained)
         self._landed = True
-        return LandingReport(
+        report = LandingReport(
             system=system_name,
             credits_gained=int(gained),
             cargo_unloaded=sum(load.cargo_units for load in landed),
             passengers_unloaded=sum(load.passengers for load in landed),
             unloaded=tuple(landed),
         )
+        if report.delivered_anything:
+            # Counted here, at the one place a fare is ever collected, because the
+            # end screen cannot re-derive it later: the hold is already empty by
+            # then (see the Stage 9 note about not reading `carried_loads`).
+            self.ledger.record_delivery(
+                report.credits_gained, report.cargo_unloaded, report.passengers_unloaded
+            )
+        return report
 
     def launch(self) -> None:
         """Leave the spaceport: stopped dead, then immune for the grace period.
@@ -575,6 +606,7 @@ class GameState:
             )
         self._credits -= cost
         self._fuel = self._fuel + wanted
+        self.ledger.record_purchase(cost)
         return PortTransaction(
             succeeded=True,
             reason=(
@@ -608,6 +640,7 @@ class GameState:
             )
         self._credits -= cost
         self.stats.armor = self.stats.armor + wanted
+        self.ledger.record_purchase(cost)
         return PortTransaction(
             succeeded=True,
             reason=(
@@ -656,6 +689,7 @@ class GameState:
         self._credits -= cost
         self._upgrade_levels[offer.stat] = offer.level
         apply_upgrade(self.stats, offer.stat, self._upgrade_steps[offer.stat])
+        self.ledger.record_purchase(cost)
         return PortTransaction(
             succeeded=True,
             reason=(
@@ -701,6 +735,10 @@ class GameState:
     def advance_frame(self) -> None:
         """Advance the simulation by exactly one fixed timestep (1/60 s)."""
         self._boundary_reached_this_frame = False
+        # Every tick of the simulation is time this run spent, landed or not:
+        # the end screen's "time in the saddle" is a frame count, never a wall
+        # clock, because the spec forbids reading real dt.
+        self.ledger.record_frames()
 
         # The gun cycles whether or not the trigger is held, and whether or not
         # the ship can currently fly: a weapon that stopped counting during a jump
@@ -737,7 +775,13 @@ class GameState:
         if self._reverse_state != _ReverseState.REVERSING:
             self._apply_continuous_rotation()
 
-        if self._input.thrust:
+        # No fuel, no thrust. Hyperspace is exempt (the jump fare was paid up
+        # front and its burn is driven by the jump sequence, not by the tank),
+        # and so is a ship on the ground, which never gets this far. Without the
+        # gate an empty hull is a free engine: `fuel` floors at 0 and every later
+        # frame would accelerate it for nothing, which turns "Stranded!" into a
+        # suggestion.
+        if self._input.thrust and not self.is_out_of_fuel():
             self._apply_thrust(self.stats.acceleration_rate, self.stats.top_speed)
             self._consume_fuel()
 

@@ -30,6 +30,18 @@ class Scene:
     def handle_event(self, event) -> None:  # noqa: ANN001
         pass
 
+    def on_resume(self) -> None:
+        """This scene has become the top scene again (a modal above it closed).
+
+        A modal swallows the ``KEYUP`` of the very key that opened it: the press
+        goes to the scene below, the modal is pushed in the same frame, and the
+        release arrives at a scene that has no tactical input layer to feed. The
+        scene below is then left holding a phantom key, and the *next* press of
+        that key produces no rising edge at all. Every scene that opens a modal
+        on a keypress needs this callback; the alternative is each modal reaching
+        down through the stack to reset somebody else's input layer.
+        """
+
     def update(self) -> None:
         pass
 
@@ -84,8 +96,28 @@ class SceneManager:
         self._stack.append(scene)
 
     def pop(self) -> None:
-        """Remove the top scene from the stack."""
+        """Remove the top scene from the stack and wake up whatever is underneath.
+
+        The new top scene gets :meth:`Scene.on_resume` — one notification from the
+        owner of the stack, rather than every modal reaching for the scene below
+        it (which a modal can only do by digging into private state).
+        """
         if self._stack:
+            top = self._stack.pop()
+            top.on_exit()
+            if self._stack:
+                self._stack[-1].on_resume()
+
+    def clear(self) -> None:
+        """Pop every scene in the stack, top first.
+
+        The way to end a *run* rather than a screen: a run's scenes hold its
+        ``GameState``, its fog of war, its market board, and its grudges, and any
+        of them surviving back to the title screen is a leaked save file nobody
+        asked for. ``on_resume`` is deliberately *not* fired while unwinding —
+        everything below is being discarded too.
+        """
+        while self._stack:
             top = self._stack.pop()
             top.on_exit()
 

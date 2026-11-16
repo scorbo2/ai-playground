@@ -76,10 +76,14 @@ timestep. There is no fullscreen option.
   one drifts closer. It reverts to `No target` on its own the moment the scanned
   hull is destroyed (no keypress needed), and every new system starts at
   `No target`. Press `T` again to re-lock on whoever is nearest right now.
-- `ESC` — close whatever modal is open (System Map, difficulty dialog). On the
-  spaceport it is the same as clicking `Launch!`.
-  *The "Exit game?" confirmation arrives in Stage 13; QUIT (closing the window)
-  already exits the game.*
+- `ESC` — close whatever modal is open (System Map, difficulty dialog, the "Exit
+  game?" confirmation). On the spaceport it is the same as clicking `Launch!`.
+  Out in the tactical view it raises an **"Exit game?"** confirmation: **Keep
+  playing** puts it away, **Return to title screen** abandons the run and clears
+  the scene stack, so the next `New game` starts clean. It is refused while
+  jumping — a ship in hyperspace has already paid for a system it is about to
+  arrive in, and un-arriving is not a pause menu. QUIT (closing the window) still
+  exits the game outright, anywhere.
 - Arrow keys — rotate the ship (hold to keep turning, release to stop).
   `Up` applies thrust (consumes fuel); `Down` reverses course once, then stops.
 - `Space` — fire the ship's projectile weapon. **Hold it**, don't tap it: the gun
@@ -214,9 +218,63 @@ order:
   `tactical.launch_immunity_frames` of launching, rounds pass straight through
   you (and keep flying — they are not consumed by your invulnerability). The
   system's planet is likewise not a target: rounds fly through the disc.
-- **Dying ends the run.** Armour at 0 stops the ship, locks the controls, and
-  prints `Ship lost with all hands!`. Stage 13 turns that into the proper end
-  screen; for now the flag is raised and the flying stops.
+- **Dying ends the run.** Armour at 0 stops the ship, locks the controls, and puts
+  the end screen up over everything. See "Ending a run" below for the other three
+  ways this game can finish.
+
+### Ending a run: the four ways this game finishes
+
+A run ends exactly once, and then the end screen takes over the whole window —
+whatever was underneath it (a dogfight, a spaceport counter) stops simulating
+without anything having to ask it to. Which ending you get depends on *where* you
+are when the condition becomes true:
+
+| Ending | Headline | Fires when |
+| --- | --- | --- |
+| Ship lost | `Ship lost with all hands!` | armour reaches 0 — anywhere, at any moment |
+| Stranded | `Stranded! Lost in space!` | the tank is empty and no spaceport is within `tactical.landing_range` |
+| Bankrupt | `Bankrupt!` | at a spaceport: the tank cannot pay for a jump, and a full tank is unaffordable |
+| Victory | `You're a millionaire! You win!` | the balance reaches `economy.win_credits` — checked at a spaceport |
+
+The two credit endings are judged **at a spaceport only**, and the ordering is
+deliberate:
+
+- **Unloading comes first.** Arrive with 1,900 credits and 5,000 credits of cargo
+  bound for this system and you are not bankrupt: the fare is in your pocket before
+  the question is asked. The question is then re-asked after *every* purchase in
+  the port, because buying an upgrade is the transaction that most often makes the
+  next tank of fuel unaffordable — and a shop that let you walk out with no fuel,
+  no credits, and no way to jump is a softlock with a service counter.
+- **Winning outranks going broke.** A fare that carries you past `win_credits`
+  while leaving you unable to afford fuel is a win, not a bankruptcy.
+- **Victory never interrupts a flight.** A bounty that crosses the target in
+  mid-air is banked silently; you find out at the next spaceport you use.
+
+Two rules are what make "Stranded!" mean something, and both are worth knowing
+before you blame the fuel gauge:
+
+- **A dry tank buys no thrust.** The moment `fuel` reaches 0, `Up` stops doing
+  anything. Velocity carries on (Newton does), so a hull that spent its last unit
+  of fuel a little short of the planet can still coast in — it just cannot climb
+  back out. Without this rule "Stranded!" would be a suggestion: fuel 0 would keep
+  accelerating you home for free.
+- **`J` at exactly the jump cost is fatal, and it says so.** The jump rules refuse
+  a jump they cannot pay for *and survive* (see "Jumping and the tactical
+  envelope"), and that refusal is reported as `Stranded! Lost in space!` rather
+  than a silent beep. Keep a margin above `tactical.jump.fuel_cost`.
+
+The end screen prints the headline, one line on *why* it fired, and the run's
+numbers: final balance (against the target it was chasing), the system the run
+ended in, systems discovered, jumps made, contracts delivered, credits earned,
+credits spent, hulls destroyed, and time in the saddle. Those numbers are counted
+as they happen, not reconstructed afterwards, which is why "contracts delivered"
+can survive the cargo itself being unloaded.
+
+`Return to title screen` (or `ESC`) tears the whole run down rather than putting
+it away: a second `New game` starts with Alpha–Delta on the charts, the configured
+starting balance, a full tank, an empty hold, and nobody who remembers the first
+run. That is tested on purpose — see `tests/test_stage13.py`'s
+`test_secondNewGame_afterAFullRun_shouldStartCleanInEveryObservableWay`.
 
 ### Audio: what makes a noise
 
@@ -497,7 +555,11 @@ The `economy` block prices everything the spaceport sells:
 - `fuel_cost_per_unit` / `repair_cost_per_point` — the port service rates. The
   buttons fill the tank and the hull; a full tank or an intact hull shows `Full` /
   `Intact` and cannot be clicked.
-- `win_credits` — the victory balance (enforced in Stage 13).
+- `win_credits` — the victory balance. Crossing it does not end the run where it
+  happens; the win is announced at the next spaceport you use (see "Ending a
+  run"). Set it somewhere a determined trader can reach: at the shipped rates, a
+  full hold at the top of the fare range with a far-hop bonus pays tens of
+  thousands per contract, so a million is a few dozen good contracts.
 
 `new_game.starting_credits` is the balance a new run begins with (30,000 easy,
 20,000 medium and hard), and `tactical.launch_immunity_frames` is the grace period

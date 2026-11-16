@@ -43,6 +43,7 @@ from src.model.ship_upgrades import UpgradeOffer, upgrade_text
 from src.scene_manager import Scene
 
 if TYPE_CHECKING:
+    from src.end_of_run import EndOfRun
     from src.scene_manager import SceneManager
 
 SCREEN_SIZE = (1024, 768)
@@ -328,19 +329,33 @@ class SpaceportView(Scene):
         game_state: GameState,
         landing_report: LandingReport,
         lore_book: LoreBook,
+        end_of_run: "EndOfRun",
     ) -> None:
         """Take the visit that was rolled when the player landed.
 
         No scene manager here: :meth:`on_enter` receives it, exactly as the map
         modal does. The lore comes from the world's book rather than a string so
         the scene cannot invent (or re-roll) a system's history.
+
+        ``end_of_run`` is not decoration: this screen spends the player's money,
+        and a purchase here can be the one that makes the next tank of fuel
+        unaffordable. The credit endings must be re-checked after every
+        transaction, and this scene is the only thing that sees a transaction —
+        the tactical scene underneath is frozen while the modal is up, so a check
+        left to the next frame of play would never run at all.
         """
         super().__init__()
         if visit is None or game_state is None:
             raise ValueError("SpaceportView needs the port visit and the game state")
+        if end_of_run is None:
+            raise ValueError(
+                "SpaceportView needs the run's EndOfRun: buying an upgrade can be "
+                "what bankrupts a run, and a port that cannot report it is a softlock"
+            )
         self.visit = visit
         self.game_state = game_state
         self.landing_report = landing_report
+        self.end_of_run = end_of_run
         self.lore_lines = wrap_text(
             lore_book.line_for(visit.system), LORE_SIZE, SCREEN_SIZE[0] - 2 * MARGIN
         )
@@ -471,11 +486,18 @@ class SpaceportView(Scene):
         self._report(self.game_state.purchase_upgrade(offer))
 
     def _report(self, result) -> None:
-        """Show the outcome, and beep only when something actually happened."""
+        """Show the outcome, and beep only when something actually happened.
+
+        Then ask whether the balance the transaction just changed has ended the
+        run. A player who spends their last credits on a cargo upgrade with a dry
+        tank is bankrupt on this frame, not on the next one they cannot reach: the
+        run's scenes are frozen behind this modal.
+        """
         self.message = result.reason
         if result.succeeded:
             self._manager.audio.play_confirm()
         self._sync_buttons()
+        self.end_of_run.poll_at_port()
 
     def _launch(self) -> None:
         """Leave the port: the model arms the immunity window, then we pop.

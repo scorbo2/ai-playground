@@ -1531,3 +1531,204 @@ loophole with a docstring. Superseded below.)
   same size and speed). No sounds for the boundary warning, the bounty banner, the
   jump-denial message, or cargo/repair transactions beyond the shared confirm beep.
   No audio asset files at all, and `resources/` stays image-only.
+
+## Stage 13 — End states, the flow back to title, and the anti-softlock sweep
+
+- **One object owns "this run is over", because "exactly once" is not a
+  predicate.** Four endings can be noticed in three places (every tactical frame,
+  the moment a spaceport opens, and after every transaction inside it), and a
+  predicate that is *still* true on the next frame is not a bug — a second end
+  screen stacked on the first is. `src/end_of_run.py::EndOfRun` holds the only
+  copy of "has this run ended", the only `manager.push(EndScreenScene(...))`, and
+  the order the checks run in. The *rules* stay pure and stateless in
+  `src/model/endgame.py`, which is what lets the stage's anti-softlock gate be a
+  sweep over hand-built states instead of a scripted walkthrough:
+
+  ```
+  ENDING_SHIP_LOST  "Ship lost with all hands!"     armour <= 0 (Stage 11's death)
+  ENDING_STRANDED   "Stranded! Lost in space!"      tank dry, no spaceport in range
+  ENDING_BANKRUPT   "Bankrupt!"                     at a port, no jump, no tank affordable
+  ENDING_VICTORY    "You're a millionaire! You win!" balance >= economy.win_credits, at a port
+  ```
+
+  The strings are the spec's, verbatim, and they live in code: they are part of
+  the game's vocabulary, not tunable content, and a config that could rename
+  "Bankrupt!" into "Out of money" would be a second source of truth for the
+  endings (`ending_copy` / `ending_explanation` are keyed to the ids, so the
+  screen never re-derives a headline from a string comparison).
+
+- **Ship lost outranks stranded; victory outranks bankrupt.** Both orderings are
+  one-line ordering rules with a story behind them, so they are recorded rather
+  than discovered by a future edit: a hull that runs its tank dry *and* catches a
+  killing round in the same frame was killed (the dry tank is an epitaph detail),
+  and a player who has just settled a fare big enough to win, and can no longer
+  afford a tank, has *won* — reporting that as "Bankrupt!" would be a lie about
+  what just happened. `endgame.ending_in_flight` and `ending_at_port` each encode
+  one of these orderings, and nothing else in the project compares endings.
+
+- **`GameScene.pending_game_over` is now a read-only property over the
+  coordinator.** Stage 11 left it as a boolean the scene wrote when the hull was
+  destroyed; Stage 13 needs the same fact in three places, and two records of one
+  death is one too many. It now reads
+  `end_of_run.ended or end_of_run.pending_ending != ENDING_NONE`, which keeps every
+  Stage 8 and Stage 11 assertion on that flag green without touching those tests.
+
+- **The latch exists for the ending the model cannot see.** Stage 8 refuses `J` at
+  *exactly* the jump's fuel cost and calls it a game over. That is a refusal: no
+  jump starts, no fuel is spent, no state changes, so no per-frame predicate will
+  ever notice. `EndOfRun.latch(ENDING_STRANDED)` is how the scene says "this
+  player is dead in one frame", and firing remains the poll's job so the ordering
+  rules stay in one place. A latch rather than an event: it survives until shown,
+  and it is cleared when it is, so the same death is never announced twice. A
+  second *non-victory* latch never overwrites the first one owed to the player.
+
+- **"Stranded" is judged every frame, not on the fuel→0 transition.** The obvious
+  implementation (watch for the tank going empty) misses the hull that ran dry
+  three frames ago and has since drifted out of landing range, and the hull that
+  arrives in a system with exactly nothing in the tank. `is_stranded` is a state
+  question — dry, aloft, out of range — and `EndOfRun.poll_flight()` asks it on
+  every tactical frame. Landed and jumping ships are excluded *inside the
+  predicate* rather than at the call site: a ship at a spaceport with an empty
+  tank is a customer, not a castaway, and a ship in hyperspace has already paid
+  for the system it is about to arrive in.
+
+- **A dry tank buys no thrust, and that is the load-bearing rule of the whole
+  stage.** `GameState.advance_frame` now gates the engine
+  (`if self._input.thrust and not self.is_out_of_fuel()`). Without it, "Stranded!"
+  is a suggestion: fuel 0 would still buy acceleration, and a player with a dry
+  tank and no credits could thrust home, land, refuel, and never lose. With it, a
+  hull that spends its last unit of fuel outside landing range is committed, and
+  the loop closes. Hyperspace is deliberately *not* gated the same way: the jump
+  fare is paid up front and the jump rules refuse a jump they cannot pay for, so
+  there is no free ride to gate.
+- **"Empty" is defined once**: `GameState.is_out_of_fuel()` compares against
+  `EMPTY_TANK_EPSILON = 1e-9`, and both the thrust gate and the stranded rule ask
+  *that*, so a ship can never be grounded by one rule and still flying for the
+  other. The epsilon is not paranoia about `_consume_fuel` (which clamps at exact
+  `0.0`): it is for a config whose burn rate leaves float dust behind — 0.0001 per
+  frame across 1000 units of tank does not land on zero, and a stranded rule that
+  demanded exactness would be a config-dependent softlock.
+
+- **An exact-fuel jump is the Stranded ending, not a bespoke one.** The dev plan
+  groups the Stage 8 exact-fuel case under "running out of fuel", and the spec
+  gives exactly one ending for that, so it is `ENDING_STRANDED` with the spec's
+  own copy. A fifth ending ("you miscalculated the fare") would be a fourth way to
+  lose and a fifth headline for the same mistake.
+
+- **"Bankrupt!" means the port cannot get you out, priced on a full tank.** The
+  port sells exactly one fuel product — a full tank, at
+  `economy.fuel_cost_per_unit` — so the check is: cannot pay a jump *and survive
+  it* (`fuel > tactical.jump.fuel_cost`, the jump rules' own strict answer), and
+  cannot afford the tank. The rejected alternative was a prorated top-up ("buy
+  just enough to jump, plus a margin"): it is not the product the port sells, and
+  the margin it needs is a knob the config does not have — Stage 8's exact-fuel
+  rule makes "exactly enough" a fatal purchase, so any prorated price would either
+  be the fatal one or an invented one. The second half of the predicate covers a
+  config where `fuel_capacity` does not exceed `tactical.jump.fuel_cost`: there is
+  nothing to buy that could ever leave, and such a system must end the run rather
+  than strand the player politely in a shop.
+- **The credit endings are evaluated at the port, and after every transaction
+  inside it.** Two reasons, one of them a rule and one of them a bug waiting to
+  happen. The rule: the spec evaluates the credit conditions only *after arrival
+  at a spaceport*, and the auto-unload runs first, so a fare can pay for the tank
+  of fuel that was unaffordable on the way in (a test asserts the port opens, the
+  message credits the cargo, and no ending fires). The bug: the tactical scene is
+  frozen while the modal is up, so a check left to "next frame of play" would
+  never run at all — and buying an upgrade is exactly the click that can make the
+  next tank unaffordable. Hence
+  `SpaceportView(visit, state, report, lore, end_of_run)` (the fifth argument is
+  refused as `None`: a port that cannot report a bankruptcy is a softlock with a
+  shop counter).
+- **Victory is only ever checked at a spaceport.** A bounty that crosses
+  `economy.win_credits` in mid-air does not end the run; the player finds out at
+  the next port. That is the spec's evaluation point, and it is also the humane
+  one — the alternative interrupts a dogfight with a champagne screen.
+
+- **`SceneManager` grew `on_resume()` and `clear()`, and `pop()` fixed a latent
+  bug on the way in.** Modals that return the player to a live tactical view need
+  to tell it that it is live again: `Scene.on_resume()` is that hook, and
+  `GameScene.on_resume()` resets the tactical input's held-key state. The bug this
+  closes: park a ship, press `M` (map opens), press `ESC` (map closes), press `M`
+  again — the second press used to do nothing, because the tactical view's input
+  still believed `M` was held down from before the modal. The stage-13 test
+  `test_realLoop_mapModal_shouldReopenAfterBeingClosedWithEscape` is the
+  regression test for that, and it fails on the old `pop()`.
+- **`clear()` rather than a loop of `pop()`**: it pops everything *without*
+  running `on_resume()` on a scene that is about to be thrown away, which is what
+  "the run is over, tear the stack down" means.
+
+- **The end screen clears the stack instead of popping.** Popping would leave the
+  tactical view (and, behind it, a spaceport) alive under the next game's title
+  screen — a run's scenes surviving a run is a save file nobody designed, and the
+  second `New game` would find a stack three deep. `_return_to_title()` (from the
+  button *and* from `ESC`) is `manager.clear()` followed by a fresh
+  `TitleScene`, and the second-new-game test asserts the stack is exactly
+  `[TitleScene, GameScene]` afterwards.
+- **The end screen is a full-window repaint, not an overlay.** A modal over a
+  spaceport leaves a shop counter visible behind a corpse. The screen paints its
+  own background and never calls `super().draw()`, and the pixel test
+  (`test_returnToTitle_fromTheEndScreen_leavesNoGameOverPixelsOnTheTitleScreen`) samples the
+  real display surface for the end screen's own accent/rule colours — with a
+  positive control asserting those colours *are* present while the end screen is
+  up, because a pixel probe that looks for colours that were never painted is a
+  test that cannot fail.
+
+- **The spec's optional "pause → title" shipped as an `Exit game?`
+  confirmation.** The README already promised that confirmation ("Stage 13
+  delivers it"), and a bare `ESC`-to-title that silently discards an unfinished
+  run is a keystroke that costs an hour of play. `ESC` out in the tactical view
+  (`exit_game` in the input map) raises a modal with *Keep playing* / *Return to
+  title*; `ESC` inside the modal means keep playing, matching every other modal in
+  the game. It is refused mid-jump — a ship in hyperspace has no title screen to
+  return to that would not be a save-scum of the system it is about to arrive in,
+  and no jump state exists to return from.
+- **`EndScreenScene` answers `ESC` itself** rather than routing it through a
+  button, because the spec names the button and the keyboard convention is the
+  game's own; both paths go through the same `_return_to_title()`.
+
+- **Run stats are a ledger written at the events, not a report derived at the
+  end.** `src/model/run_stats.py::RunLedger` hangs off `GameState` and gets one
+  `record_*` call per event at the place the event actually happens (the jump's
+  arrival, the unload inside `land()`, the bounty paid, the hull removed, the port
+  transaction charged, every `advance_frame`). A summary computed at the end by
+  walking the game state would have to re-derive "how many contracts did this
+  player deliver", which is not recoverable: loads are removed when they are paid
+  out, and the market board belongs to the system entry rather than the run. The
+  ledger is also the only place with the *spent* number, since credits are
+  fungible and a balance cannot tell you what left it.
+- **`RunSummary` returns `(label, value)` pairs, not padded strings** — the screen
+  owns column geometry (`VALUE_COLUMN_X`, `SUMMARY_LINE_HEIGHT`), so the model
+  layer does no layout, and the table's row count (nine) is asserted from the
+  summary itself so a new stat cannot silently run off the bottom of the panel
+  into the button.
+- **Frames are counted in the model** (`advance_frame` ticks the ledger), so the
+  "Time in the saddle" number is simulation time rather than wall-clock time: a
+  paused modal, a debugger, and a laptop with a stalled loop do not age the run.
+
+- **No new config keys, deliberately.** The endings are four ids and eight strings
+  of fixed vocabulary; `win_credits` already existed (Stage 9 shipped it inert, and
+  Stage 13 is what makes it bite), and the fuel rules needed for stranded/bankrupt
+  are all existing keys (`fuel_capacity`, `fuel_burn_per_frame`,
+  `landing_range`, `jump.fuel_cost`, `fuel_cost_per_unit`). That keeps the
+  three shipped `config_*.json` and the fixture files untouched, which is the
+  rule the loader enforces. The consequence to remember when a later stage wants
+  an ending toggle: there is no knob for "disabled endings" and the endings are
+  unconditionally armed.
+
+- **No new sounds.** The end screen reuses the confirm beep for
+  *Return to title*, and the exit confirmation reuses it both ways, per the
+  title-screen/dialog precedent. A bespoke death sting would be Stage 12's
+  synthesis machinery with a new `SOUND_*` id and two new config keys, for a
+  moment the player has already heard in the game itself (the destruction sound is
+  already the loudest thing in the mix).
+
+- **Test scaffolding gotchas worth copying.** A fake scene manager must run
+  `on_enter`/`on_exit`/`on_resume`, not just grow a list: the spaceport and the
+  end screen build their pygame_gui widgets in `on_enter`, so a fake that skipped
+  it was asserting against an empty shell and every button test was vacuously
+  green. `GameState.in_landing_range` is a *method* taking the planet position —
+  `assert not state.in_landing_range` is a bound-method truthiness test, i.e. a
+  green test that asserts nothing. And a helper that grabs `manager.top` after
+  pressing `L` breaks on exactly the interesting case (a port that opens onto a
+  bankrupt balance pushes the end screen over itself), so `open_port()` searches
+  the stack for the `SpaceportView`.

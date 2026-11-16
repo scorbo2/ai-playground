@@ -51,9 +51,12 @@ from src.model.jump import (
     JumpParams,
 )
 from src.model.lore import LoreBook
+from src.model.endgame import ENDING_NONE, ENDING_SHIP_LOST, ENDING_STRANDED
 from src.model.scan import ShipScanner
 from src.model.weapons import Shot
+from src.end_of_run import EndOfRun
 from src.scene_manager import Scene
+from src.scenes.exit_confirm import ExitConfirmation
 from src.scenes.map_view import MapView
 from src.scenes.spaceport_view import SpaceportView
 from src.scenes.tactical_view import TacticalView
@@ -175,6 +178,15 @@ class GameScene(Scene):
             map_state=self.system_map,
             params=JumpParams.from_config(config["tactical"]),
         )
+        # Stage 13: who ends the run, once. Built after the jump controller
+        # because the bankruptcy rule is priced against the same configured jump
+        # fare the controller charges — one number, two questions about it.
+        self.end_of_run = EndOfRun(
+            manager=manager,
+            game_state=self.game_state,
+            system_map=self.system_map,
+            jump_fuel_cost=self.jumps.params.fuel_cost,
+        )
         # The flash covers the whole window, HUD included, so it is drawn by the
         # scene that draws last — a flash that politely skipped the right-hand
         # third would read as a rendering bug, not as drama. The shockwave does
@@ -183,9 +195,16 @@ class GameScene(Scene):
             pygame.Rect(0, 0, *SCREEN_SIZE),
             origin=(VIEW_WIDTH / 2.0, SCREEN_SIZE[1] / 2.0),
         )
-        # Stage 13 seam: see _request_jump. Public so the flow tests can assert
-        # on it without reaching into private state.
-        self.pending_game_over = False
+
+    @property
+    def pending_game_over(self) -> bool:
+        """True once the run is over — latched, or already on screen.
+
+        Read from :class:`~src.end_of_run.EndOfRun`, which owns the latch: a flag
+        here would be a second record of the same fact, and the two would drift
+        the first time an ending fired without setting it.
+        """
+        return self.end_of_run.ended or self.end_of_run.pending_ending != ENDING_NONE
 
     def _apply_audio_levels(self, config: dict) -> None:
         """Tell the mixer how loud this run's effects are.
@@ -297,8 +316,10 @@ class GameScene(Scene):
         animating — the spec blocks the map during a jump. ``jump`` (pressing J)
         runs the eligibility rules. ``fire`` (holding space) asks the ship's gun
         for a shot, and ``scan`` (pressing T) moves the HUD's nearest-ship lock.
-        Returning the actions keeps this scene's reaction to discrete input
-        testable without driving the whole stack.
+        ``exit_game`` (pressing ESC out in the open) raises the "Exit game?"
+        confirmation rather than ending the run on one keystroke. Returning the
+        actions keeps this scene's reaction to discrete input testable without
+        driving the whole stack.
 
         The order of the halves below is the frame's causality, not a style
         choice: input is drained and the ship moves, then the jump advances (which
@@ -319,6 +340,8 @@ class GameScene(Scene):
                 self._open_spaceport()
             elif action.kind == "scan":
                 self._handle_scan()
+            elif action.kind == "exit_game":
+                self._open_exit_confirmation()
             elif action.kind == "fire":
                 shot = self.game_state.try_fire()
                 if shot is not None:
@@ -328,7 +351,21 @@ class GameScene(Scene):
         self._advance_encounter()
         self._advance_gunfight(shots)
         self._sync_jump_presentation()
+        self._poll_end_of_run()
         return tuple(actions)
+
+    def on_resume(self) -> None:
+        """A modal above this scene just closed: the keyboard comes back.
+
+        The one thing that has to happen is forgetting the phantom key. A modal
+        opened by a keypress never sees that key's release (the press went here,
+        the modal took the release), so the input layer keeps believing ``M`` or
+        ``ESC`` is still down and the *next* press of it produces no rising edge:
+        "the map only opens every other time". The spaceport path already paid
+        for that trap (see :meth:`_close_port_modal`); this is the same fix for
+        every other modal, applied by the object that owns the stack.
+        """
+        self.tactical.input.reset_held_state()
 
     def _enter_system(self, system: str) -> None:
         """Deal what one visit to a system consists of: its job market and its traffic.
@@ -523,6 +560,11 @@ class GameScene(Scene):
 
             if impact.fired_by_player and is_npc_faction(impact.target_faction):
                 self.relations.declare_hostile_to_player(impact.target_faction)
+                if impact.destroyed:
+                    # Counted on the impact, not in _award_bounty: a war-side that
+                    # refuses to pay still lost a hull, and the end screen would
+                    # otherwise under-report the run it is reporting on.
+                    self.game_state.ledger.record_kill()
             if impact.destroyed:
                 self._award_bounty(impact)
 
@@ -549,16 +591,20 @@ class GameScene(Scene):
         if bounty is None:
             return
         self.game_state.add_credits(bounty.credits)
+        self.game_state.ledger.record_bounty(bounty.credits)
         self.tactical.show_message(bounty.message, BOUNTY_MESSAGE_FRAMES)
 
     def _note_player_destruction(self) -> None:
         """Flag the run as over the frame the hull comes apart, and stop flying.
 
-        Stage 13 owns the end screen (and the other ways to lose), so this stage
-        raises the flag rather than the screen. What it *does* do is lock the
-        controls: a wreck that can still steer and shoot is a bug the player can
-        keep playing in, and the difference between "dead" and "dead but still
-        flying" is the sort of thing a Stage 13 gate has to be able to assert.
+        The flag is Stage 13's :class:`~src.end_of_run.EndOfRun` latch: this scene
+        knows the hull is gone before the per-frame predicates get their turn, and
+        the coordinator is the one thing allowed to turn a flag into a screen (and
+        to clear the latch when it does, which is what makes the "exactly once"
+        gate true). What this scene *does* do is lock the controls: a wreck that
+        can still steer and shoot is a bug the player can keep playing in, and the
+        difference between "dead" and "dead but still flying" is the sort of thing
+        a Stage 13 gate has to be able to assert.
 
         No explosion sound is played here on purpose. Only an impact can destroy
         the hull, and :meth:`_resolve_impacts` already played the big boom for the
@@ -570,7 +616,7 @@ class GameScene(Scene):
         if not self.pending_game_over:
             self.tactical.input.lock_input()
             self.tactical.show_message(PLAYER_LOST_MESSAGE, BOUNTY_MESSAGE_FRAMES)
-        self.pending_game_over = True
+        self.end_of_run.latch(ENDING_SHIP_LOST)
 
     def _close_port_modal(self) -> None:
         """Notice that the player launched: the modal is gone, the market is not.
@@ -624,11 +670,10 @@ class GameScene(Scene):
 
         if outcome.blocker == BLOCKED_EXACT_FUEL:
             # Spec special case: J with *exactly* the jump's fuel cost is an
-            # immediate game over, with no animation. Stage 8 owns the half it
-            # can see (no jump, no fuel spent); Stage 13 turns this flag into
-            # the game-over screen. Flagged rather than silently implemented so
-            # the seam is not mistaken for the whole rule.
-            self.pending_game_over = True
+            # immediate game over, with no animation. The rules of the refusal are
+            # Stage 8's (no jump, no fuel spent); the death is latched here and put
+            # on screen by the poll at the end of this same frame.
+            self.end_of_run.latch(ENDING_STRANDED)
         if outcome.message:
             self.tactical.show_message(outcome.message, JUMP_DENIED_MESSAGE_FRAMES)
 
@@ -650,6 +695,10 @@ class GameScene(Scene):
             self._manager.audio.play_thunderclap()
         elif event.kind == EVENT_ARRIVED:
             self.tactical.notify_system_changed(event.system)
+            # Counted on arrival rather than on request: a jump that has not
+            # landed is a trip the player has paid for but not taken, and the end
+            # screen reports the trips they took.
+            self.game_state.ledger.record_jump()
             # Entering a system deals everything the visit consists of: its job
             # market and its fleet. The roll happens even if the player never
             # lands, and the old encounter object is dropped here — which is the
@@ -748,5 +797,49 @@ class GameScene(Scene):
             self._enter_system(current)
         self._port_modal_open = True
         self._manager.push(
-            SpaceportView(self.port_visit, self.game_state, report, self.lore)
+            SpaceportView(
+                self.port_visit,
+                self.game_state,
+                report,
+                self.lore,
+                self.end_of_run,
+            )
         )
+        # Both credit endings are evaluated *here*, immediately after the landing
+        # settled its fares (spec: the win and bankruptcy conditions are only
+        # evaluated after arrival at a spaceport, and the auto-unload may have paid
+        # for the tank of fuel the player could not otherwise afford). The spaceport
+        # cannot be the one to ask: this scene's update() is frozen while the modal
+        # is on the stack, so a check left to the next frame would never run.
+        self.end_of_run.poll_at_port()
+
+    # ------------------------------------------------------------------
+    # Endings and exits (Stage 13)
+    # ------------------------------------------------------------------
+    def _poll_end_of_run(self) -> None:
+        """Ask, once per tactical frame, whether the run has just finished.
+
+        Last in :meth:`update`, after every cause of death has had its turn: the
+        hull the gunfight just wrecked, the jump that just paid its fare, the fuel
+        the thrusters just drained. Asking earlier is how a frame dies twice.
+
+        Locking the controls on the way out is belt-and-braces: the end screen
+        owns the keyboard from this frame on, but a scene that keeps a live input
+        layer while the run is over is a scene one future refactor will drive again.
+        """
+        if self.end_of_run.poll_flight() != ENDING_NONE:
+            self.tactical.input.lock_input()
+
+    def _open_exit_confirmation(self) -> None:
+        """Handle ``ESC`` out in the open: ask before throwing the run away.
+
+        The spec makes returning to the title from play optional, and the README
+        already promises an "Exit game?" confirmation. A bare ESC-to-title would
+        delete a run the game cannot save, so the key raises a question instead.
+        Silently ignored mid-jump, which is the same policy the map follows: the
+        player cannot steer, cannot cancel, and should not be offered a way to
+        leave the system they are already paying to reach.
+        """
+        if self.game_state.is_jumping:
+            return
+        self._manager.push(ExitConfirmation())

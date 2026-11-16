@@ -1513,7 +1513,8 @@ def test_spaceportView_shouldShowTheCurrentSystemAndItsOnceAssignedLoreLine():
     assert " ".join(port.lore_lines) == expected
     # ...and re-entering the same system shows the same line (never re-rolled).
     second_port = SpaceportView(
-        port.visit, scene.game_state, scene.game_state.land(system), scene.lore
+        port.visit, scene.game_state, scene.game_state.land(system), scene.lore,
+        scene.end_of_run,
     )
     assert " ".join(second_port.lore_lines) == expected
 
