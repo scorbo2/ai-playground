@@ -65,7 +65,8 @@ class Action:
     """A discrete, frame-aligned user action emitted by the input layer.
 
     ``kind`` is one of: ``fire``, ``open_map``, ``jump``, ``land``, ``scan``,
-    ``exit_game``. Payloads are reserved for later stages.
+    ``exit_game``. Each action carries only its ``kind``; the frame-aligned
+    input layer emits one action per keypress, so no control needs extra data.
     """
 
     kind: str = ""
