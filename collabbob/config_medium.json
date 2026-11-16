@@ -1,0 +1,125 @@
+{
+  "rng": {
+    "seed": null
+  },
+  "new_game": {
+    "starting_credits": 20000
+  },
+  "player_ship": {
+    "fuel_capacity": 1000,
+    "passenger_space": 5,
+    "cargo_room": 20,
+    "shields": 50,
+    "armor": 100,
+    "weapon_power": 10,
+    "weapon_fire_rate": 1,
+    "turn_rate_deg_per_sec": 180,
+    "weapon_range": 1200,
+    "acceleration_rate": 0.2,
+    "top_speed": 5,
+    "length": 40,
+    "width": 20
+  },
+  "upgrade_steps": {
+    "shields": 50,
+    "armor": 100,
+    "engine_percent": 20,
+    "weapon_damage": 15,
+    "fuel": 250,
+    "cargo": 20,
+    "passenger": 5
+  },
+  "tactical": {
+    "system_pixel_size": 2000,
+    "fuel_burn_per_frame": 0.2,
+    "landing_range": 100,
+    "planet_diameter": 40,
+    "launch_immunity_frames": 120,
+    "jump": {
+      "fuel_cost": 250,
+      "frames": 180,
+      "acceleration": 1.2,
+      "transition_frames": 45,
+      "spawn_distance": [
+        400,
+        850
+      ]
+    },
+    "stars": {
+      "count": 150,
+      "grey_min": 128,
+      "grey_max": 255
+    },
+    "boundary_warnings": {
+      "message_frames": 120,
+      "cooldown_frames": 300
+    }
+  },
+  "combat": {
+    "projectile_speed_bonus": 8,
+    "projectile_diameter": 3,
+    "pirate_bounty": 10000,
+    "bobber_bounty": 5000,
+    "localhoster_bounty": 5000
+  },
+  "npc": {
+    "spawn_chance_near": 0.1,
+    "spawn_chance_far": 0.7,
+    "ships_min": 1,
+    "ships_max": 4,
+    "stat_multiple": 4.0,
+    "stat_variance": 0.5,
+    "aim_jitter_degrees": 4.0,
+    "engage_range_fraction": 0.75,
+    "min_distance_from_player": 350
+  },
+  "economy": {
+    "win_credits": 1000000,
+    "fuel_cost_per_unit": 2,
+    "repair_cost_per_point": 4,
+    "upgrade_base_cost": 1000,
+    "upgrade_cost_multiplier": 2,
+    "upgrade_max_level": 5,
+    "upgrade_offers_min": 2,
+    "upgrade_offers_max": 5,
+    "missions_min": 4,
+    "missions_max": 8,
+    "cargo_fare_per_unit": [
+      150,
+      400
+    ],
+    "passenger_fare_each": [
+      800,
+      2000
+    ],
+    "far_destination_bonus": 1.5,
+    "cargo_types": [
+      "iron ore",
+      "wine",
+      "textiles",
+      "computer parts",
+      "colony supplies",
+      "machine parts"
+    ]
+  },
+  "map": {
+    "system_count": 26,
+    "connections_min": 2,
+    "connections_max": 3,
+    "alpha_connections": [
+      "Bravo",
+      "Charlie",
+      "Delta"
+    ]
+  },
+  "audio": {
+    "master_volume": 0.8,
+    "confirm_beep": 0.25,
+    "weapon_fire": 0.3,
+    "ship_impact": 0.35,
+    "ship_destruction": 0.5,
+    "scan_klaxon": 0.4,
+    "jump_spinup": 0.32,
+    "jump_thunderclap": 0.55
+  }
+}

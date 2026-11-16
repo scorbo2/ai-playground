@@ -1,0 +1,5 @@
+pygame-ce==2.5.8
+pygame_gui==0.6.11
+pydantic==2.13.5
+loguru==0.7.3
+pytest==9.1.1
