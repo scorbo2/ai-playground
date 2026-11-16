@@ -11,9 +11,16 @@ import json
 import os
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from src.map_systems.graph import NATO_SYSTEMS
+from src.model.audio_levels import AudioLevels
 from src.model.combat import CombatRules
 from src.model.encounter import SpawnRules
 
@@ -396,6 +403,50 @@ class _NewGameConfig(_ConfigModel):
     starting_credits: int
 
 
+class _AudioConfig(_ConfigModel):
+    """Levels for every generated sound effect, plus one master multiplier.
+
+    The key names are the sound ids themselves (``AudioLevels.SOUND_IDS``), so a
+    config key, the buffer registry in :mod:`src.audio`, and the lookup in
+    :meth:`AudioLevels.level_for` are one vocabulary — there is no translation
+    table for a typo to hide in.
+
+    Range checking is *delegated* to :meth:`AudioLevels.from_config`, the same
+    object :class:`~src.scenes.game_scene.GameScene` hands the mixer at runtime,
+    exactly as the ``combat`` and ``npc`` sections delegate to their runtime
+    rules. A config that loads is a config the audio system runs on.
+    """
+
+    master_volume: float
+    confirm_beep: float
+    weapon_fire: float
+    ship_impact: float
+    ship_destruction: float
+    scan_klaxon: float
+    jump_spinup: float
+    jump_thunderclap: float
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _reject_bool_as_a_level(cls, value: object) -> object:
+        """Refuse ``true``/``false`` before pydantic quietly turns them into 1.0.
+
+        ``"weapon_fire": true`` is somebody's typo or somebody's joke; either way
+        it must not become "full scale gunfire".
+        """
+        if isinstance(value, bool):
+            raise ValueError("audio levels must be numbers between 0 and 1")
+        return value
+
+    @model_validator(mode="after")
+    def _check_levels_are_usable(self) -> "_AudioConfig":
+        try:
+            AudioLevels.from_config(self.model_dump())
+        except ValueError as exc:
+            raise ValueError(f"audio section is unusable: {exc}") from exc
+        return self
+
+
 class _RngConfig(_ConfigModel):
     seed: Optional[int] = None
 
@@ -410,6 +461,7 @@ class ConfigRoot(_ConfigModel):
     npc: _NpcConfig
     economy: _EconomyConfig
     map: _MapConfig
+    audio: _AudioConfig
 
     @model_validator(mode="after")
     def _check_npc_spawn_room(self) -> "ConfigRoot":
@@ -529,6 +581,16 @@ def base_config() -> dict:
             "connections_min": 1,
             "connections_max": 3,
             "alpha_connections": ["Bravo", "Charlie", "Delta"],
+        },
+        "audio": {
+            "master_volume": 0.8,
+            "confirm_beep": 0.25,
+            "weapon_fire": 0.3,
+            "ship_impact": 0.35,
+            "ship_destruction": 0.5,
+            "scan_klaxon": 0.4,
+            "jump_spinup": 0.32,
+            "jump_thunderclap": 0.55,
         },
     }
 

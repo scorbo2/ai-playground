@@ -1,173 +1,280 @@
-"""Fail-soft audio system using stdlib array + pygame.mixer.Sound.
+"""The mixer layer: what plays a sound, when, and how loud — fail-soft, always.
 
-Audio mixer init failure is never fatal. All public methods silently
-succeed when audio is unavailable (e.g. under the dummy audio driver in
-the test suite).
+Stage 12's audio comes in three modules, and this is the only one of them allowed
+to touch ``pygame.mixer``:
+
+* :mod:`src.audio_buffers` — the waveforms. Pure stdlib synthesis, no pygame, no
+  config; a test (and a machine with no audio hardware) can exercise it directly.
+* :mod:`src.model.audio_levels` — the policy: which effects exist and how loud
+  each may be, validated at startup by the config loader.
+* **this module** — the mixer: the mixer's lifetime, the per-sound buffer cache,
+  the format negotiation with whatever device the machine actually has, and the
+  ``play_*`` verbs the scenes call.
+
+Levels are applied with ``Sound.set_volume`` rather than baked into the samples,
+so a config change costs one mixer call instead of another synthesis pass, and
+"0.4" means the same loudness for an explosion as for a beep (every buffer is
+peak-normalised in :mod:`src.audio_buffers` for exactly that reason).
+
+Audio is **never** fatal. Every mixer call is wrapped, so a machine with no audio
+device, a mixer that refuses to initialise, a driver reporting a format this
+module cannot feed, or a ``Sound()`` that explodes mid-frame all leave the game
+running silently. The one concession to debuggability is :data:`AUDIO_DEBUG_ENV`:
+set it and the swallowed exceptions go to stderr, which is the only way to tell
+"the mixer is broken" apart from "the mixer is configured to be silent".
 """
 
+from __future__ import annotations
+
 import array
-import math
-import random as _random_lib
+import os
+import sys
+from typing import Dict, Tuple
 
 import pygame
 
+from src.audio_buffers import BUFFER_GENERATORS, DEFAULT_SAMPLE_RATE
+from src.model.audio_levels import (
+    SOUND_CONFIRM_BEEP,
+    SOUND_JUMP_SPINUP,
+    SOUND_JUMP_THUNDERCLAP,
+    SOUND_SCAN_KLAXON,
+    SOUND_SHIP_DESTRUCTION,
+    SOUND_SHIP_IMPACT,
+    SOUND_WEAPON_FIRE,
+    AudioLevels,
+)
 
-def _generate_beep(
-    freq: float = 880.0,
-    duration_ms: int = 80,
-    volume: float = 0.25,
-    sample_rate: int = 44100,
-) -> "array.array[int]":
-    """Generate a sine-wave beep as a signed 16-bit mono array.
+# Set this environment variable to have the deliberately-swallowed audio errors
+# printed to stderr. Off by default: an unsolvable audio problem should degrade
+# the game quietly, not spam a terminal, but it must not be *undiagnosable*.
+AUDIO_DEBUG_ENV = "COLLABBOB_AUDIO_DEBUG"
 
-    A short linear fade-out removes the click artefact at the end.
+# Mixer voice count. SDL's default is 8, and a system with four ships plus the
+# player can easily have six explosions and a klaxon wanting a voice at once;
+# the extra cost is negligible, and a dropped gunshot is a dropped *event*.
+MIXER_VOICE_COUNT = 16
+
+# Requested mixer format. Mono 16-bit is what the generators emit, so no
+# conversion is needed on the normal path (see _match_mixer for the fallback).
+_MIXER_FREQUENCY = DEFAULT_SAMPLE_RATE
+_MIXER_SAMPLE_BITS = -16
+_MIXER_CHANNELS = 1
+
+
+def _debug_enabled() -> bool:
+    return bool(os.environ.get(AUDIO_DEBUG_ENV))
+
+
+def _warn(context: str, exc: BaseException) -> None:
+    """Report a swallowed audio failure, but only to whoever asked to hear it."""
+    if _debug_enabled():
+        print(f"[audio] {context}: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Mixer format handling
+# ---------------------------------------------------------------------------
+
+
+def _mixer_format() -> "Tuple[int, int] | None":
+    """The format the mixer actually came up with, as ``(sample_rate, channels)``.
+
+    ``Sound(buffer=...)`` does not resample: it assumes the buffer is already in
+    the mixer's format. Requesting 44.1 kHz mono usually gets you exactly that,
+    but a device that overrides the request would otherwise turn a 0.9 s boom
+    into a 0.45 s squeak (a mono buffer read as stereo halves its length).
+    Returning None means "this mixer cannot be fed the buffers we generate", and
+    the caller treats that as *no audio*, never as a crash.
     """
-    n_samples = int(sample_rate * duration_ms / 1000)
-    buf: array.array = array.array("h", [0] * n_samples)
-    for i in range(n_samples):
-        t = i / sample_rate
-        fade = 1.0 - i / n_samples
-        val = int(32767 * volume * fade * math.sin(2.0 * math.pi * freq * t))
-        buf[i] = max(-32768, min(32767, val))
-    return buf
+    try:
+        initialisation = pygame.mixer.get_init()
+    except Exception as exc:  # pragma: no cover - driver-dependent
+        _warn("mixer get_init", exc)
+        return None
+    if not initialisation:
+        return None
+    frequency, sample_bits, channels = initialisation
+    if abs(int(sample_bits)) != 16:
+        _warn(
+            "mixer sample size",
+            ValueError(
+                f"mixer came up at {sample_bits} bits; only 16-bit buffers are generated"
+            ),
+        )
+        return None
+    return int(frequency), int(channels)
 
 
-# Gains live in code for now, matching the Stage 2 confirm beep. Stage 12 is the
-# dedicated audio pass and owns moving every gain into config; until then there
-# is exactly one place to look for each number.
-_JUMP_SPINUP_GAIN = 0.32
-_THUNDERCLAP_GAIN = 0.55
+def _match_mixer(buffer: array.array, channels: int) -> array.array:
+    """Duplicate mono samples if the mixer insisted on more than one channel.
 
-# The spin-up runs slightly *shorter* than the 180-frame (3 s) burn so the sweep
-# tops out just before the white-out; the thunderclap then lands on the flash.
-_JUMP_SPINUP_MS = 2600
-_THUNDERCLAP_MS = 900
-
-
-def _clamp_int16(value: float) -> int:
-    """Hard-clip a float sample into the signed 16-bit range."""
-    return max(-32768, min(32767, int(value)))
-
-
-def _generate_jump_spinup(
-    duration_ms: int = _JUMP_SPINUP_MS,
-    volume: float = _JUMP_SPINUP_GAIN,
-    start_freq: float = 130.0,
-    end_freq: float = 1150.0,
-    sample_rate: int = 44100,
-) -> "array.array[int]":
-    """A rising engine sweep: the ship spooling up to hyperspace.
-
-    The frequency ramps *exponentially* (start_freq * ratio^t) rather than
-    linearly: a linear ramp sounds like a siren, an exponential one sounds like
-    an engine, because equal time spans cover equal musical intervals.
-    Amplitude climbs with the pitch and the last few percent fade out so the
-    cut into the thunderclap does not click.
+    The rare path: we ask for mono, and mono is what SDL gives us unless the
+    device refuses. The loop is O(n) Python, which is acceptable precisely
+    because it almost never runs.
     """
-    n_samples = int(sample_rate * duration_ms / 1000)
-    buf: array.array = array.array("h", [0] * n_samples)
-    ratio = end_freq / start_freq
-    phase = 0.0
-    for i in range(n_samples):
-        progress = i / n_samples
-        freq = start_freq * (ratio ** progress)
-        phase += 2.0 * math.pi * freq / sample_rate
-        # A second, detuned partial a fifth up turns a bare sine into something
-        # mechanical rather than something like a phone signal.
-        envelope = progress ** 0.6
-        if progress > 0.94:
-            envelope *= (1.0 - progress) / 0.06
-        wave = math.sin(phase) + 0.35 * math.sin(phase * 1.5)
-        buf[i] = _clamp_int16(32767 * volume * envelope * wave * 0.6)
-    return buf
+    if channels <= 1:
+        return buffer
+    interleaved = array.array("h", [0]) * (len(buffer) * channels)
+    for index, sample in enumerate(buffer):
+        for voice in range(channels):
+            interleaved[index * channels + voice] = sample
+    return interleaved
 
 
-def _generate_thunderclap(
-    duration_ms: int = _THUNDERCLAP_MS,
-    volume: float = _THUNDERCLAP_GAIN,
-    rumble_freq: float = 46.0,
-    sample_rate: int = 44100,
-) -> "array.array[int]":
-    """A thunderclap: a crack of noise over a decaying sub-bass rumble.
-
-    Two components, because a clap is not one sound:
-      * broadband noise that decays fast (the "crack"), low-passed by mixing
-        each sample with its neighbour so it is a boom and not a hi-hat;
-      * a very low sine that decays slowly (the rumble you feel in the chest).
-
-    The noise comes from a fixed-seed RNG so the buffer is byte-identical every
-    run: a sound that changes between launches cannot be tested by digest.
-    """
-    n_samples = int(sample_rate * duration_ms / 1000)
-    rng = _random_lib.Random(20240611)
-    buf: array.array = array.array("h", [0] * n_samples)
-    previous_noise = 0.0
-    for i in range(n_samples):
-        t = i / sample_rate
-        progress = i / n_samples
-        # Fast attack, long exponential tail: exp(-6) is inaudible by the end.
-        crack = math.exp(-6.0 * progress)
-        noise = rng.uniform(-1.0, 1.0)
-        # Cheap one-pole low-pass: unfiltered white noise is painful at 55% gain.
-        smoothed = 0.65 * noise + 0.35 * previous_noise
-        previous_noise = noise
-        rumble = math.sin(2.0 * math.pi * rumble_freq * t) * math.exp(-2.2 * progress)
-        # The initial transient is the loudest thing in the mix, which is what
-        # makes it read as a *clap* rather than as distant weather.
-        sample = (0.62 * smoothed * crack + 0.55 * rumble) * (1.0 - progress ** 3)
-        buf[i] = _clamp_int16(32767 * volume * sample)
-    return buf
+# ---------------------------------------------------------------------------
+# Playback
+# ---------------------------------------------------------------------------
 
 
 class AudioSystem:
-    """Wrapper around pygame.mixer that fails softly if unavailable."""
+    """Every sound the game makes, fail-soft, at the levels the config asked for.
 
-    def __init__(self) -> None:
+    Sounds are generated lazily on first use and cached: the jump sweep alone is
+    ~115 000 samples of pure-Python maths, and making the title screen wait for a
+    sound the player may never trigger is a bad trade.
+
+    ``apply_levels`` exists because the levels belong to a *run*, and a run does
+    not exist until the player has picked a difficulty: anything the title screen
+    and the difficulty dialog play runs at the defaults.
+    """
+
+    def __init__(self, levels: "AudioLevels | None" = None) -> None:
+        self.levels = levels if levels is not None else AudioLevels()
         self._available = False
-        self._confirm_sound: "pygame.mixer.Sound | None" = None
-        # Buffers are generated on first use, not at construction: the jump and
-        # thunderclap sweeps are ~150k samples each of pure Python maths, and
-        # making the title screen wait half a second for a sound the player may
-        # never hear is a bad trade.
-        self._sounds: dict = {}
+        self._sample_rate = _MIXER_FREQUENCY
+        self._channels = _MIXER_CHANNELS
+        self._sounds: Dict[str, pygame.mixer.Sound] = {}
         try:
-            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+            pygame.mixer.init(
+                frequency=_MIXER_FREQUENCY,
+                size=_MIXER_SAMPLE_BITS,
+                channels=_MIXER_CHANNELS,
+                buffer=512,
+            )
+            format_ = _mixer_format()
+            if format_ is None:
+                return
+            self._sample_rate, self._channels = format_
+            pygame.mixer.set_num_channels(MIXER_VOICE_COUNT)
             self._available = True
-            beep_buf = _generate_beep()
-            self._confirm_sound = pygame.mixer.Sound(buffer=beep_buf)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Audio is never fatal: a game that cannot make a sound still plays.
+            _warn("mixer init", exc)
+            self._available = False
 
+    # ------------------------------------------------------------------
     @property
     def available(self) -> bool:
+        """Whether a usable mixer is up (not whether anything is audible)."""
         return self._available
 
-    def play_confirm(self) -> None:
-        """Play the UI confirmation beep (no-op if audio is unavailable)."""
-        if self._available and self._confirm_sound is not None:
+    def apply_levels(self, levels: AudioLevels) -> None:
+        """Adopt a new set of levels, re-levelling anything already generated.
+
+        Called by :class:`~src.scenes.game_scene.GameScene` when a run starts, and
+        by nothing else during a session. Cached buffers are kept: the level is
+        mixer state, so re-reading a config costs one ``set_volume`` per loaded
+        sound rather than a fresh synthesis pass.
+        """
+        if not isinstance(levels, AudioLevels):
+            raise TypeError(
+                "apply_levels expects an AudioLevels; got "
+                f"{type(levels).__name__} (call AudioLevels.from_config first)"
+            )
+        self.levels = levels
+        for name, sound in self._sounds.items():
+            self._set_volume(name, sound)
+
+    def loaded_volumes(self) -> Dict[str, float]:
+        """Levels currently applied to the sounds that have been generated.
+
+        Introspection for tests and for a future debug overlay. Read from the
+        mixer rather than echoed from the config, so a driver that quantises
+        volume is reported honestly.
+        """
+        volumes: Dict[str, float] = {}
+        for name, sound in self._sounds.items():
             try:
-                self._confirm_sound.play()
-            except Exception:
-                pass
+                volumes[name] = float(sound.get_volume())
+            except Exception as exc:  # pragma: no cover - defensive
+                _warn(f"get_volume {name}", exc)
+        return volumes
 
-    def play_jump_spinup(self) -> None:
-        """The hyperspace spool-up, started with the burn (fail-soft)."""
-        self._play_lazy("jump_spinup", _generate_jump_spinup)
-
-    def play_thunderclap(self) -> None:
-        """The arrival boom, fired on the frame the screen goes white (fail-soft)."""
-        self._play_lazy("thunderclap", _generate_thunderclap)
-
-    def _play_lazy(self, name: str, buffer_factory) -> None:
-        """Build (once) then play a generated buffer, swallowing any mixer failure."""
-        if not self._available:
+    # ------------------------------------------------------------------
+    def play(self, sound_id: str) -> None:
+        """Play one of the registered effects. Never raises, never blocks."""
+        try:
+            level = self.levels.level_for(sound_id)
+        except Exception as exc:  # an unknown id is a programming error: say so
+            _warn(f"unknown sound id {sound_id!r}", exc)
+            return
+        if not self._available or level == 0.0:
+            # A muted effect costs nothing at all: no buffer, no voice, no maths.
             return
         try:
-            sound = self._sounds.get(name)
+            sound = self._sounds.get(sound_id)
             if sound is None:
-                sound = pygame.mixer.Sound(buffer=buffer_factory())
-                self._sounds[name] = sound
+                sound = self._build(sound_id)
+                if sound is None:
+                    return
             sound.play()
-        except Exception:
-            # Audio is never fatal: a game that cannot make a sound still plays.
-            pass
+        except Exception as exc:
+            _warn(f"play {sound_id}", exc)
+
+    def _build(self, sound_id: str) -> "pygame.mixer.Sound | None":
+        """Generate (once) and cache the buffer for one sound id."""
+        factory = BUFFER_GENERATORS.get(sound_id)
+        if factory is None:
+            _warn(f"no generator registered for {sound_id!r}", ValueError("missing"))
+            return None
+        try:
+            buffer = _match_mixer(factory(self._sample_rate), self._channels)
+            sound = pygame.mixer.Sound(buffer=buffer)
+        except Exception as exc:
+            # Leave nothing cached: a half-built sound must not be remembered as
+            # a permanent silence.
+            self._sounds.pop(sound_id, None)
+            _warn(f"generate {sound_id}", exc)
+            return None
+        self._set_volume(sound_id, sound)
+        self._sounds[sound_id] = sound
+        return sound
+
+    def _set_volume(self, sound_id: str, sound: "pygame.mixer.Sound") -> None:
+        try:
+            sound.set_volume(self.levels.level_for(sound_id))
+        except Exception as exc:  # pragma: no cover - defensive
+            _warn(f"set_volume {sound_id}", exc)
+
+    # ------------------------------------------------------------------
+    # The verbs the scenes call. Each is one sound id, named as the event rather
+    # than as the waveform, so a scene reads as sentences: "play_impact".
+    # ------------------------------------------------------------------
+    def play_confirm(self) -> None:
+        """UI confirmation beep: a selection happened in a modal."""
+        self.play(SOUND_CONFIRM_BEEP)
+
+    def play_weapon_fire(self) -> None:
+        """Any ship's gun firing — including ships off-screen (spec)."""
+        self.play(SOUND_WEAPON_FIRE)
+
+    def play_impact(self) -> None:
+        """A round landed on a hull: the small explosion."""
+        self.play(SOUND_SHIP_IMPACT)
+
+    def play_destruction(self) -> None:
+        """A hull came apart: the large explosion."""
+        self.play(SOUND_SHIP_DESTRUCTION)
+
+    def play_klaxon(self) -> None:
+        """The ``T`` alarm, for a hostile contact only."""
+        self.play(SOUND_SCAN_KLAXON)
+
+    def play_jump_spinup(self) -> None:
+        """The hyperspace spool-up, started with the burn."""
+        self.play(SOUND_JUMP_SPINUP)
+
+    def play_thunderclap(self) -> None:
+        """The arrival boom, on the frame the screen goes white."""
+        self.play(SOUND_JUMP_THUNDERCLAP)

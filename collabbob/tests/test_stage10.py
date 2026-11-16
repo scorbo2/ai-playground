@@ -40,6 +40,7 @@ from src.config import CONFIG_FILES, GAME_ROOT, base_config, load_config
 import json
 import os
 
+from src.harness import RecordingAudio
 from src.hud import HudView
 from src.main_loop import SCREEN_SIZE
 from src.map_systems.graph import NATO_SYSTEMS
@@ -216,30 +217,12 @@ def _count_colour_in(
     return hits
 
 
-class _SpyAudio:
-    """Counts the sounds a scene asks for (Stage 12 formalises this pattern)."""
-
-    def __init__(self):
-        self.confirm_count = 0
-        self.spinup_count = 0
-        self.thunderclap_count = 0
-
-    def play_confirm(self):
-        self.confirm_count += 1
-
-    def play_jump_spinup(self):
-        self.spinup_count += 1
-
-    def play_thunderclap(self):
-        self.thunderclap_count += 1
-
-
 class _StackManager:
     """Enough of SceneManager for GameScene: config, audio, and a real stack."""
 
     def __init__(self, config: "dict | None" = None):
         self._config = config or base_config()
-        self.audio = _SpyAudio()
+        self.audio = RecordingAudio()
         self.stack = []
 
     def game_config(self) -> dict:

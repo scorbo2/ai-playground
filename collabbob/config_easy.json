@@ -113,5 +113,15 @@
       "Charlie",
       "Delta"
     ]
+  },
+  "audio": {
+    "master_volume": 0.8,
+    "confirm_beep": 0.25,
+    "weapon_fire": 0.3,
+    "ship_impact": 0.35,
+    "ship_destruction": 0.5,
+    "scan_klaxon": 0.4,
+    "jump_spinup": 0.32,
+    "jump_thunderclap": 0.55
   }
 }

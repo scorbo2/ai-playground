@@ -6,6 +6,7 @@ import pytest
 
 from src.audio import AudioSystem
 from src.config import base_config, load_config
+from src.harness import RecordingAudio
 from src.scene_manager import Scene, SceneManager
 from src.scenes.difficulty_dialog import DifficultyDialog
 from src.scenes.game_scene import GameScene
@@ -17,14 +18,6 @@ from src.scenes.title_screen import TitleScene
 # ---------------------------------------------------------------------------
 
 
-class _MockAudio:
-    def __init__(self):
-        self.confirm_count = 0
-
-    def play_confirm(self):
-        self.confirm_count += 1
-
-
 class _MockManager:
     """Minimal SceneManager stand-in for unit tests."""
 
@@ -34,7 +27,7 @@ class _MockManager:
             "config_medium.json": base_config(),
             "config_hard.json": base_config(),
         }
-        self.audio = _MockAudio()
+        self.audio = RecordingAudio()
         self.selected_difficulty = None
         self.selected_config = None
         self._running = True

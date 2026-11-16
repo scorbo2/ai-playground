@@ -23,6 +23,7 @@ import pytest
 import main  # noqa: F401  (ensures project root is on sys.path)
 
 from src.config import base_config
+from src.harness import RecordingAudio
 from src.scenes.game_scene import GameScene
 from src.scenes.tactical_view import TacticalView
 from src.hud import (
@@ -82,6 +83,9 @@ class _FakeManager:
     def __init__(self, config):
         self.configs = {"config_easy.json": config}
         self.selected_config = config
+        # GameScene re-levels the mixer when a run starts, so a manager that only
+        # looks like an HUD host stops being enough once it hosts a whole scene.
+        self.audio = RecordingAudio()
 
     def game_config(self):
         return self.selected_config

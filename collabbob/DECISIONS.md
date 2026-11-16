@@ -1336,3 +1336,198 @@ loophole with a docstring. Superseded below.)
   shared by the bounty banner and the "Ship lost with all hands!" banner; that is
   one constant serving two unrelated pieces of copy, and it should be split the
   first time either duration changes.
+
+---
+
+## Stage 12 — Audio: generated buffers, configured levels, and event-to-sound wiring
+
+- **Three modules, split by what they are allowed to import.** The *policy*
+  (which sounds exist, what each may cost in loudness, what the config is not
+  allowed to say) is `src/model/audio_levels.py::AudioLevels`, which imports no
+  pygame at all. The *synthesis* is `src/audio_buffers.py`, also pygame-free:
+  pure functions from a sample rate to an `array` of ints, plus a stdlib
+  `write_wav`. The *machinery* — mixer lifetime, the buffer cache, and the only
+  call sites of `pygame.mixer` in the project — is `src/audio.py`. The obvious
+  single module would force `src/config.py` to import pygame, because the loader
+  validates by delegating to the runtime object (`CombatRules.from_config`,
+  `SpawnRules`, and now `AudioLevels.from_config`), so a config that loads is a
+  config the mixer runs on and neither side can quietly relax the other's rule —
+  but the loader must not drag a display-and-mixer dependency into "parse some
+  JSON and complain about it". The second cut pays for itself the same way: the
+  synthesis needs no audio device, so `scripts/render_audio_buffers.py` renders
+  every WAV importing only `src.audio_buffers`, and
+  `testaudioBuffers_shouldImportWithoutTouchingPygame` runs a subprocess asserting
+  that `pygame` is still absent from `sys.modules` afterwards. Reviewing or
+  regenerating the sound of this game requires a Python interpreter and nothing
+  else.
+
+- **The id constants live with the policy, and the synthesis registry imports
+  them.** `src/audio_buffers.py` is pygame-free and "owns no policy", with one
+  deliberate exception: its registry keys are the `SOUND_*` constants from
+  `src/model/audio_levels.py`. Duplicating the seven strings in the synthesis
+  module instead would have created two vocabularies that must agree, which is the
+  exact failure mode the single-tuple rule exists to prevent. That import pulls in
+  seven string constants and still no pygame, which is the trade worth making.
+
+- **The model module is `audio_levels.py`, not `model/audio.py`.** Two modules
+  named `audio` in one project (`src/audio.py` and `src/model/audio.py`) import
+  unambiguously but *read* ambiguously: a grep for "audio" returns two files whose
+  relationship has to be remembered. The longer name says what it holds.
+
+- **Sound ids are the config keys.** `AudioLevels.SOUND_IDS` is one tuple: the key
+  in the `audio` section, the key in `src.audio_buffers.BUFFER_GENERATORS`, and the argument to
+  `level_for` are the same string, so there is no translation table for a typo to
+  hide in. `master_volume` is deliberately **not** a member of `SOUND_IDS`: it is
+  a multiplier on every member, and letting it in would make `level_for` answer
+  "how loud is `master_volume`?", a question with no honest answer. `AudioLevels.keys()`
+  is the one place that knows the section's full key set (`master_volume` plus the
+  ids), and the config test asserts that against the shipped files.
+
+- **Levels are mixer state, not baked waveforms, and every buffer is peak-normalised.**
+  Both halves matter. Generators build a float mix, `_normalize` scales it so the
+  loudest sample sits at `_REFERENCE_PEAK` (95% of full scale, leaving SDL some
+  headroom for overlapping voices), and the mixer applies `master x level` with
+  `set_volume`. The alternative — passing a `volume=` into each generator, which is
+  what Stage 8 did — has three costs: a config change invalidates every cached
+  buffer (a 2.6s sweep is 115k samples of pure-Python maths); each generator's
+  internal headroom means "0.4" means a different loudness per effect, which makes
+  the spec's "volumes from config" decorative; and pre-clip normalisation is the
+  only way to avoid flattening a mix that peaks above full scale. The cost is one
+  extra concept (`_REFERENCE_PEAK`) and a test that pins every buffer's peak to it.
+
+- **A mute-everything config is free, and that is a rule rather than an optimisation.**
+  `AudioSystem.play` returns before generating a buffer when `level_for(...) == 0.0`,
+  so a silent config synthesises nothing at all. `AudioLevels.silent` exists for
+  callers that want to ask the same question up front.
+
+- **Buffer generation honours the mixer it actually got, and refuses formats it
+  cannot produce.** `pygame.mixer.Sound(buffer=...)` performs **no** conversion:
+  it assumes the buffer is already in the mixer's format, so mono samples handed
+  to a stereo mixer play at half length and double pitch (verified: a 0.9s buffer
+  became a 0.45s one). `AudioSystem` therefore reads `pygame.mixer.get_init()`,
+  asks its pygame-free generators for that rate, duplicates samples if the device
+  overrode the mono request (`_match_mixer`, an O(n) Python loop that runs only on
+  hardware that asks for it), and treats a non-16-bit mixer as **no audio** rather
+  than guessing. Feeding a mixer a format you did not measure is the kind of bug
+  that shows up once, on one machine, as noise.
+
+- **`set_num_channels(16)`.** SDL's default is 8 voices. Four ships plus the
+  player, a klaxon, and two explosions is easily nine simultaneous requests, and a
+  dropped voice is a dropped *event* — the player does not hear the wreck they just
+  watched. Deliberately not config-exposed: it is a mixer-capacity constant, not a
+  balance knob.
+
+- **One generator for every boom, three distinct sounds.** `_generate_explosion`
+  covers the small hit, the big wreck, and (since Stage 12) the hyperspace
+  thunderclap that Stage 8 hand-rolled; `_generate_thunderclap` is now a thin
+  parameterised call into it — with one upgrade, a 4ms attack ramp, because the
+  Stage 8 version clicked at the start and a full-scale sine at sample 0 is exactly
+  the discontinuity an attack ramp exists to remove. Stage 8's synthesis test
+  follows the code rather than the other way round: it already pretended the
+  generators were pure functions, and now they are, so its imports changed from
+  `src.audio` to `src.audio_buffers` and nothing else in it moved. Sharing the
+  generator is the DRY move; sharing the *sound* would be a bug, so the differences
+  are parameters (crack decay, rumble pitch, debris hiss, an optional delayed
+  second crack) and **per-effect fixed seeds**, so no two booms even draw the same
+  noise. The test suite pins the claim
+  with measurements rather than adjectives: the wreck is 5x the *brightness*
+  (mean sample-to-sample change) of a hit, rumbles at its configured ~38Hz where
+  the hit rumbles near 95Hz (measured by re-counting zero crossings on a low-passed
+  copy, which recovers the configured rumble frequency), and the thunderclap keeps
+  more than twice as much energy in its tail as a hit does. Silent tuning while
+  tuning this: Stage 8's thunderclap now has a 4ms attack ramp, so its first sample
+  is no longer a discontinuity (a pop); its Stage 8 assertions still pass.
+
+- **One event, one sound — including the player's death.** `_resolve_impacts` plays
+  `ship_impact` or `ship_destruction`, never both, and `_note_player_destruction`
+  plays **nothing**: only an impact can destroy the hull, and the loop above already
+  played the big boom for the round that did it. Two copies of the same buffer on
+  one frame is one louder boom, not two events — which is why there is an
+  `destruction_count == 1` assertion on the player-death path rather than an
+  obvious `== 2`.
+
+- **The klaxon answers the same question the readout's colour answers.** It fires on
+  a `T` **press** when `scanner.displayed`'s faction is hostile *to the player*
+  (`PlayerRelations.is_hostile_to_player`), not when a faction is intrinsically
+  hostile and not when the display merely changes. Consequences, all of them tested:
+  a Bobber you have never shot at is silent; a Bobber you shot at alarms; a hostile
+  drifting into being the nearest ship is silent; Stage 11's auto-revert to
+  `No target` is silent; two presses alarm twice. The alternative — keying it to
+  the faction colour — would have put a second hostility rule in the presentation
+  layer, which is how a HUD and an alarm end up disagreeing.
+
+- **Gunfire is counted per launched round, not per firing ship.** `_sound_gunfire`
+  is handed `len(pending_shots + player_shots)`, so two hulls firing on one frame is
+  two reports and a shot that was never launched is silent. Off-screen ships are
+  audible by spec ("even ships currently offscreen"), and the test that pins it
+  advances frame by frame so the distance can be asserted **at the moment the first
+  report played** — a parked pirate that closed into view before firing would prove
+  nothing. **Not built: positional audio.** A round 900px off the starboard bow
+  plays dead centre at the configured level. `Sound.set_volume(left, right)` plus the
+  transform `world_to_screen` already owns would do it; leaving it out keeps this
+  stage to "which event makes which sound", and it is recorded as deferred rather
+  than as absent by oversight.
+
+- **Where the levels are handed over: `GameScene.__init__`.** The levels are per-run
+  config data, but the mixer and the `AudioSystem` exist before a difficulty is
+  chosen (the title screen and the difficulty dialog both beep), so the handover
+  happens at the one moment a run's config is known and a run actually begins. A
+  second game builds a second `GameScene` and re-levels the same mixer for free.
+  Rejected alternative: applying them in `DifficultyDialog`, which is the only other
+  place a config becomes a run — it would leave a directly-constructed `GameScene`
+  (every scene test, and every capture script) on the defaults, and would make the
+  dialog responsible for a device. Consequence worth knowing: **pre-run UI beeps play
+  at the code defaults**, which are the same numbers the shipped files carry, so the
+  two cannot drift apart silently.
+
+- **Fail-soft is a contract on `AudioSystem`, not a habit of the scenes.** No scene
+  wraps a `play_*` call in `try/except`. If they did, a misspelled sound id would
+  become invisible, and every mixer failure would be silently indistinguishable from
+  a mute config. Every mixer call inside `AudioSystem` is wrapped, and the default
+  behaviour is still to say nothing — but `COLLABBOB_AUDIO_DEBUG=1` (env var
+  constant `src.audio.AUDIO_DEBUG_ENV`) prints each swallowed failure to stderr,
+  which is the only way to tell "the mixer is broken" from "the config is silent".
+  `available` means "a usable mixer is up", never "anything is audible".
+
+- **Retired the per-stage audio spies.** Stages 2, 5, 7, 8, 9, 10 and 11 each
+  hand-rolled an audio stand-in, which meant every stage that added a sound had to
+  remember to add a method to five classes or watch unrelated tests die with an
+  `AttributeError` about a sound they never meant to exercise. `src/harness.py` now
+  owns `RecordingAudio` (a `Counter` of verbs, the verbs in play order, per-verb
+  count properties, and `apply_levels`), and the Stage 8/9/10/11 files import it.
+  Two fallouts, both honest: Stage 9's `jump_spinup_count` became the shared
+  `spinup_count` (nothing asserted on it), and Stage 6's `_FakeManager` plus
+  Stage 2's `_MockAudio` had to grow an audio surface — a fake manager that hosts a
+  real `GameScene` must look like a whole `SceneManager`, and a `GameScene` now
+  legitimately configures the mixer. The `RecordingAudio` spy lives in `src/harness.py`
+  rather than `tests/` because the capture scripts import the same helper and `tests/`
+  is not an importable package.
+
+- **Tooling instead of a contact sheet.** Screenshots cannot review audio, so
+  `scripts/render_audio_buffers.py` writes one 16-bit PCM WAV per effect (stdlib
+  `wave`, via `src.audio_buffers.write_wav`) and prints an amplitude profile per
+  effect (time downwards, one row per slice), so the envelope of a boom is visible
+  in a code review. The script imports no pygame at all, so it runs on a headless
+  box with no audio device. The generated WAVs are **not committed**: they are
+  reproducible byte-for-byte from the seeds in `src.audio_buffers.py`, and
+  committing them would put a few hundred kilobytes of derived binary into the repo
+  to be kept in sync with code that already generates them.
+
+- **Test scaffolding worth copying.** `with_silent_guns(*ships)` re-parks a hull
+  with `weapon_fire_rate=0.0` — the model's own way of disabling a weapon (an
+  infinite cooldown, per the Stage 11 `WeaponClock` refactor) — because a test that
+  hand-launches a round and asserts `impact_count == 1` is otherwise counting how
+  busy the parked pirate's AI was. Rounds aimed **at** an NPC are launched with
+  `faction=FACTION_PLAYER, owner=game_state`: a round can never hit its owner, so
+  "park a pirate, fire a pirate's round at the pirate" is a guaranteed miss and a
+  very confusing green test.
+
+- **What Stage 12 deliberately does not have.** No music or ambient loop (there is
+  no `pygame.mixer.music` anywhere in the project, and a looping soundtrack is a
+  different subsystem with its own fade rules). No distance attenuation or
+  panning. No in-game volume controls, mute key, or settings screen — the config is
+  the only surface. No per-faction gunshot variants (a pirate round and a
+  Localhoster round sound identical, which is consistent with them also being the
+  same size and speed). No sounds for the boundary warning, the bounty banner, the
+  jump-denial message, or cargo/repair transactions beyond the shared confirm beep.
+  No audio asset files at all, and `resources/` stays image-only.

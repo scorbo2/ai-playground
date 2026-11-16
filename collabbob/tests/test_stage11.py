@@ -33,6 +33,7 @@ import main  # noqa: F401  (ensures project root is on sys.path)
 
 from src.config import CONFIG_FILES, GAME_ROOT, ConfigLoadError, base_config, load_config
 from src.effects import ParticleBurst
+from src.harness import RecordingAudio
 from src.hud import (
     BAR_HEIGHT,
     LINE_HEIGHT,
@@ -230,30 +231,12 @@ def park_ships_in_scene(scene: "GameScene", *ships: NpcShip, system: str = "Alph
     return scene.encounter
 
 
-class _SpyAudio:
-    """Counts the sounds a scene asks for (Stage 12 formalises this pattern)."""
-
-    def __init__(self):
-        self.confirm_count = 0
-        self.spinup_count = 0
-        self.thunderclap_count = 0
-
-    def play_confirm(self):
-        self.confirm_count += 1
-
-    def play_jump_spinup(self):
-        self.spinup_count += 1
-
-    def play_thunderclap(self):
-        self.thunderclap_count += 1
-
-
 class _StackManager:
     """Enough of SceneManager for GameScene: config, audio, and a real stack."""
 
     def __init__(self, config: "dict | None" = None):
         self._config = config or combat_config()
-        self.audio = _SpyAudio()
+        self.audio = RecordingAudio()
         self.stack = []
 
     def game_config(self) -> dict:

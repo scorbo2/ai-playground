@@ -43,6 +43,7 @@ import main  # noqa: F401  (ensures project root is on sys.path)
 from src.audio import AudioSystem
 from src.config import base_config, load_config
 from src.fonts import game_font
+from src.harness import RecordingAudio
 from src.main_loop import FixedTimestepLoop, SCREEN_SIZE
 from src.map_systems.graph import NATO_SYSTEMS, SystemGraphGenerator
 from src.model.economy import (
@@ -195,28 +196,6 @@ def mission(cargo_units: int = 0, passengers: int = 0, distance: int = 1,
     )
 
 
-class _SpyAudio:
-    """Counts the sounds a scene asks for (Stage 12 formalises the real ones).
-
-    Every method SceneManager hands to a gameplay scene is represented, so a test
-    that flies a jump cannot trip over an audio call it never meant to exercise.
-    """
-
-    def __init__(self):
-        self.confirm_count = 0
-        self.jump_spinup_count = 0
-        self.thunderclap_count = 0
-
-    def play_confirm(self):
-        self.confirm_count += 1
-
-    def play_jump_spinup(self):
-        self.jump_spinup_count += 1
-
-    def play_thunderclap(self):
-        self.thunderclap_count += 1
-
-
 # The seed every scene-level helper builds its game from. ``base_config()``
 # ships ``rng.seed: null`` (an unseeded game, as the player gets), which here
 # would mean a different world, a different contract board, and a different
@@ -237,7 +216,7 @@ class _StackManager:
 
     def __init__(self, config: "dict | None" = None):
         self._config = config or scene_config()
-        self.audio = _SpyAudio()
+        self.audio = RecordingAudio()
         self.stack = []
         self.quit_called = False
 

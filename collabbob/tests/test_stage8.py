@@ -33,8 +33,8 @@ import pytest
 
 import main  # noqa: F401  (ensures project root is on sys.path)
 
-from src.audio import (
-    AudioSystem,
+from src.audio import AudioSystem
+from src.audio_buffers import (
     _JUMP_SPINUP_MS,
     _THUNDERCLAP_MS,
     _generate_jump_spinup,
@@ -48,6 +48,7 @@ from src.effects import (
     flash_alpha,
     warp_speed,
 )
+from src.harness import RecordingAudio
 from src.hud import VIEW_WIDTH
 from src.main_loop import SCREEN_SIZE, FixedTimestepLoop
 from src.map_systems.graph import GraphConstraints, SystemGraphGenerator
@@ -151,30 +152,12 @@ def run_sequence(state: GameState, controller: JumpController, limit: int = 10_0
     return events, pumps
 
 
-class _SpyAudio:
-    """Counts the sounds the scene asks for (Stage 12 formalises this pattern)."""
-
-    def __init__(self):
-        self.confirm_count = 0
-        self.spinup_count = 0
-        self.thunderclap_count = 0
-
-    def play_confirm(self):
-        self.confirm_count += 1
-
-    def play_jump_spinup(self):
-        self.spinup_count += 1
-
-    def play_thunderclap(self):
-        self.thunderclap_count += 1
-
-
 class _FakeManager:
     """Enough of SceneManager for GameScene: config, audio, and stack verbs."""
 
     def __init__(self, config: dict | None = None):
         self._config = config or base_config()
-        self.audio = _SpyAudio()
+        self.audio = RecordingAudio()
         self.pushed: list = []
 
     def game_config(self) -> dict:

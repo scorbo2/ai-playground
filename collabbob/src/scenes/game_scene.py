@@ -36,6 +36,7 @@ from src.map_systems.graph import GraphGenerationError, SystemGraphGenerator
 from src.map_systems.layout import build_map_layout
 from src.map_systems.system_map import SystemMapState
 from src.main_loop import SCREEN_SIZE
+from src.model.audio_levels import AudioLevels
 from src.model.combat import CombatRules, Combatant, Gunfight, bounty_for_kill
 from src.model.economy import PortVisit, generate_port_offers, port_rng
 from src.model.encounter import Encounter, SpawnRules, encounter_rng, roll_encounter
@@ -121,6 +122,9 @@ class GameScene(Scene):
         # unit tests do) able to open modals without a full stack round-trip.
         self._manager = manager
         config = manager.game_config()
+        # A run's config carries the sound levels, so a run is exactly when the
+        # mixer is told about them (see _apply_audio_levels).
+        self._apply_audio_levels(config)
         # One ship state, shared by the view that simulates it and the HUD that
         # reports it. Created from the difficulty the player actually picked.
         self.game_state = GameState(config, rng=_gameplay_rng(config))
@@ -182,6 +186,24 @@ class GameScene(Scene):
         # Stage 13 seam: see _request_jump. Public so the flow tests can assert
         # on it without reaching into private state.
         self.pending_game_over = False
+
+    def _apply_audio_levels(self, config: dict) -> None:
+        """Tell the mixer how loud this run's effects are.
+
+        The levels are per-run config data (all three shipped files carry them),
+        but the mixer exists before a difficulty is chosen — the title screen and
+        the difficulty dialog both beep — so the handover happens here, at the one
+        moment a run's config is known and a run actually begins. Starting a
+        second game builds a second GameScene, which re-levels the same mixer.
+
+        Fail-soft by contract, not by try/except in the scene: AudioSystem swallows
+        every mixer failure, so gameplay code can treat a sound as an event that
+        always succeeds. A scene that wrapped each ``play_*`` in its own try block
+        would be hiding its own bug the first time an id is misspelled.
+        """
+        self._manager.audio.apply_levels(
+            AudioLevels.from_config(config.get("audio", {}))
+        )
 
     def _build_spawn_rules(self, config: dict) -> SpawnRules:
         """Hoist the ``npc`` section into the rules the spawner and AI run on.
@@ -296,7 +318,7 @@ class GameScene(Scene):
             elif action.kind == "land":
                 self._open_spaceport()
             elif action.kind == "scan":
-                self.scanner.scan(self.encounter.ships, self.game_state.position)
+                self._handle_scan()
             elif action.kind == "fire":
                 shot = self.game_state.try_fire()
                 if shot is not None:
@@ -408,7 +430,53 @@ class GameScene(Scene):
 
         impacts = self.gunfight.advance_frame(self._battlefield())
         self._resolve_impacts(impacts)
-        self.gunfight.launch_all(list(self.pending_shots) + player_shots)
+        launched = list(self.pending_shots) + player_shots
+        self.gunfight.launch_all(launched)
+        # After the launch, so a round that failed to become a projectile is not
+        # heard anyway.
+        self._sound_gunfire(len(launched))
+
+    def _handle_scan(self) -> None:
+        """Handle ``T``: move the readout's lock, and sound the alarm if it found a hostile.
+
+        The klaxon is a *press* event, not a display event. The spec ties it to
+        pressing ``T``, so an auto-revert to "No target" is silent, and so is a
+        hostile quietly becoming the nearest ship while the player is not looking.
+        The one question it asks — "is the hull I am looking at hostile to me?" —
+        is the same question the readout answers in red, which is why both read
+        the same :class:`PlayerRelations` rather than each keeping a rule.
+        """
+        self.scanner.scan(self.encounter.ships, self.game_state.position)
+        if self._displayed_contact_is_hostile():
+            self._manager.audio.play_klaxon()
+
+    def _displayed_contact_is_hostile(self) -> bool:
+        """Whether the scanned contact belongs to a faction currently at war with us.
+
+        ``getattr`` rather than an attribute access because the scanner's lock is
+        whatever the last scan found (``None`` between scans, an NPC hull after
+        one): there is no type to lean on here, and a ship from a modded faction
+        list must not be able to raise from a HUD nicety.
+        """
+        faction = getattr(self.scanner.displayed, "faction", None)
+        return (
+            faction is not None
+            and is_npc_faction(faction)
+            and self.relations.is_hostile_to_player(faction)
+        )
+
+    def _sound_gunfire(self, rounds: int) -> None:
+        """One report per round that actually left a gun, whoever fired it.
+
+        Counting *rounds* rather than firing ships matters: two hulls can fire on
+        the same frame, and a shot that was never launched makes no noise. Ships
+        outside the 683px view are included by spec — a ship you can hear but not
+        see is information — and the mixer has no notion of the tactical view's
+        camera, so an off-screen report is simply the same sound at the same level
+        (see DECISIONS.md, Stage 12).
+        """
+        for _ in range(max(0, rounds)):
+            self._manager.audio.play_weapon_fire()
 
     def _battlefield(self) -> "list[Combatant]":
         """Every body a round could hit this frame: the player plus the fleet.
@@ -448,8 +516,10 @@ class GameScene(Scene):
             tint = combatant_color(impact.faction)
             if impact.destroyed:
                 self.tactical.show_destruction(impact.position, tint)
+                self._manager.audio.play_destruction()
             else:
                 self.tactical.show_impact(impact.position, tint)
+                self._manager.audio.play_impact()
 
             if impact.fired_by_player and is_npc_faction(impact.target_faction):
                 self.relations.declare_hostile_to_player(impact.target_faction)
@@ -489,6 +559,11 @@ class GameScene(Scene):
         controls: a wreck that can still steer and shoot is a bug the player can
         keep playing in, and the difference between "dead" and "dead but still
         flying" is the sort of thing a Stage 13 gate has to be able to assert.
+
+        No explosion sound is played here on purpose. Only an impact can destroy
+        the hull, and :meth:`_resolve_impacts` already played the big boom for the
+        round that did it; a second one would be the same waveform stacked on top
+        of itself, which the mixer renders as a louder hit rather than as a death.
         """
         if not self.game_state.destroyed:
             return

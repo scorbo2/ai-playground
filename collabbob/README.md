@@ -218,6 +218,43 @@ order:
   prints `Ship lost with all hands!`. Stage 13 turns that into the proper end
   screen; for now the flag is raised and the flying stops.
 
+### Audio: what makes a noise
+
+Every effect is synthesised at run time with the stdlib `array` module and handed
+to `pygame.mixer.Sound(buffer=...)`: there are no audio files in `resources`, and
+no numpy. Seven effects exist, and each is tied to exactly one event:
+
+| Effect (config key) | Plays when |
+| --- | --- |
+| `confirm_beep` | a selection **succeeded** in the map view or the spaceport view |
+| `weapon_fire` | a round leaves any gun — **including a ship outside the 683px view** |
+| `ship_impact` | a round lands on a hull (the player's included) and it survives |
+| `ship_destruction` | a hull comes apart, whoever's gun finished it |
+| `scan_klaxon` | you press `T` and the readout locks onto a faction that is hostile to you |
+| `jump_spinup` | the hyperspace burn starts |
+| `jump_thunderclap` | the arrival frame — the same frame the screen goes white |
+
+What is deliberately *not* a sound: the readout reverting to `No target`, a jump
+that was refused, a spaceport transaction that failed, a scan that found a neutral
+(or nothing), and the player's own death. The last one is worth spelling out: the
+round that killed you already played the big boom, and stacking an identical
+buffer on the same frame is one louder boom rather than two events.
+
+**Audio can never crash the game.** If the mixer cannot initialise — no audio
+device, a container without one, a driver that reports a sample format these
+generators cannot produce — every effect becomes silent and the game carries on.
+If you want to know *why* it went silent, ask for the swallowed errors:
+
+```bash
+COLLABBOB_AUDIO_DEBUG=1 python main.py     # swallowed audio failures -> stderr
+```
+
+Levels come from the `audio` section (see
+[Sound levels](#sound-levels-audio)). There is no positional audio yet: a ship
+firing 900px off the starboard bow is heard dead centre, at the same level as one
+point-blank ahead. That is a mixer choice (`Sound.set_volume(left, right)` plus
+the camera transform the tactical view already owns), not a rule of the game.
+
 ## Configuration
 
 The game reads `config_easy.json`, `config_medium.json`, and
@@ -476,6 +513,61 @@ key. Raising `economy.missions_max` above 10 is allowed and produces a truncated
 board with an honest "...and N more this port cannot show" note — the spaceport's
 row grid is a fixed 10 contracts, 7 upgrades, and 4 manifest lines.
 
+### Sound levels (`audio`)
+
+Loudness is configuration; the *waveform* is not. Every generated buffer is built
+at a fixed reference peak and the numbers below are applied by the mixer
+(`Sound.set_volume`), which is what makes `ship_impact: 0.4` mean the same
+loudness for an explosion as for a beep — the generators own timbre, the config
+owns level, and neither can drift into the other's job.
+
+```json
+"audio": {
+  "master_volume": 0.8,
+  "confirm_beep": 0.25,
+  "weapon_fire": 0.3,
+  "ship_impact": 0.35,
+  "ship_destruction": 0.5,
+  "scan_klaxon": 0.4,
+  "jump_spinup": 0.32,
+  "jump_thunderclap": 0.55
+}
+```
+
+Every value is a number in `[0, 1]`, and `master_volume` multiplies the rest (a
+master of 0 silences the game without touching a single effect level). `0` for an
+individual effect silences just that effect. All three difficulty files carry
+identical numbers **on purpose**: difficulty changes the galaxy, not the mixer,
+and a hard-mode player should not hear different explosions.
+
+Validation runs at startup like every other section. An unknown key
+(`"explosion": 0.5`), a value outside `[0, 1]`, a `NaN`/`Infinity`, or a JSON
+`true`/`false` where a level belongs (pydantic would cheerfully turn `true` into
+full-scale gunfire) all stop the game with a message naming the key and the legal
+choices.
+
+Gotchas:
+
+- **The levels belong to a run.** The title screen and the difficulty dialog
+  cannot know which config you are about to pick, so they beep at the code
+  defaults — which are the same numbers the shipped files carry, so nothing
+  sounds different until you say so. A run's levels are handed to the mixer when
+  its `GameScene` is built, and a second game re-levels it. A future settings
+  screen needs exactly one call: `AudioSystem.apply_levels(AudioLevels.from_config(...))`.
+- **SDL quantises volume to 1/128**, so `0.3` plays at 0.296875. `AudioSystem`
+  reports what the mixer actually applied (`loaded_volumes()`), which is why the
+  tests compare volumes with a tolerance instead of exactly.
+- **Silence is free.** With every level at 0, no buffer is generated at all: no
+  115k-sample jump sweep, no mixer voice, nothing.
+- **Turning a level up does not make an effect *bigger***, only louder. "Make the
+  wreck sound bigger than a hit" is a waveform question — decay, rumble pitch,
+  debris hiss, and a second crack — and those parameters live in `src/audio_buffers.py`.
+- **Effect *lengths* are code constants** (`_SHIP_IMPACT_MS`, `_SCAN_KLAXON_MS`,
+  …), not config keys. They are tuned against the frame rate — the destruction
+  boom runs 0.9s because Stage 11's biggest particle burst lasts about that long
+  — and a config that could shorten them independently would let a player
+  configure a boom shorter than the sparks it accompanies.
+
 ### Spaceport flavour (`resources/lore.txt`)
 
 Each system gets one lore line, shown under its name when you land. The pool is a
@@ -594,6 +686,66 @@ The parked hulls run 50/100 defences, 12 damage, one round a second; the player'
 gun runs 75 damage at three a second, which is what makes the fight end inside
 nine tiles rather than at frame 4000.
 
+### Hearing the buffers
+
+A screenshot cannot prove that an explosion sounds bigger than a hit, so this
+stage dumps the buffers instead. `scripts/render_audio_buffers.py` writes one
+16-bit PCM WAV per effect and prints an amplitude profile for each — time runs
+downwards, one row per slice:
+
+```bash
+python scripts/render_audio_buffers.py                          # -> audio_wav/*.wav
+python scripts/render_audio_buffers.py --out /tmp/noise --raw   # skip the config levels
+python scripts/render_audio_buffers.py --rate 8000 --config config_hard.json
+python scripts/render_audio_buffers.py --profile-width 20       # longer profiles
+python scripts/render_audio_buffers.py --profile-width 0        # the table only
+```
+
+The script imports no pygame at all — synthesis lives in `src/audio_buffers.py`,
+which is stdlib-only by design and by test — so it runs in a CI container with no
+audio device, and so do the buffer-generation tests.
+
+The two combat booms, as the script prints them (`--profile-width 20`, first 12 of
+20 rows each), are the whole design argument: the hit is over in 280ms and decays
+monotonically, while the wreck runs 900ms, bumps back up for a second crack six
+rows in, and keeps a rumble tail alive two-thirds of the way through.
+
+```
+effect             ms  samples   peak     rms  level
+ship_impact       280    12348  31128    5379  0.280
+|#########...........|  45.1%     <- the crack
+|#######.............|  35.3%
+|######..............|  30.2%
+|#####...............|  24.4%
+|####................|  18.9%
+|###.................|  17.2%
+|###.................|  13.6%
+|##..................|  10.7%
+|##..................|   9.6%
+|#...................|   7.4%
+|#...................|   5.7%
+|#...................|   5.0%
+
+ship_destruction  900    39690  31128    7164  0.400
+|########............|  41.9%     <- the crack
+|########............|  38.3%
+|######..............|  32.1%
+|######..............|  29.9%
+|######..............|  29.6%
+|#######.............|  36.6%     <- the second hit: fuel, after the structure
+|######..............|  31.9%
+|#####...............|  26.1%
+|#####...............|  23.1%
+|####................|  17.6%
+|###.................|  16.0%
+|###.................|  12.6%
+```
+
+The generated WAVs are not committed. They are reproducible byte-for-byte from the
+fixed seeds inside `src/audio_buffers.py`, which is the same property that makes them
+testable: a sound that changed between launches could not be pinned by an
+assertion, and would mean the game sounds subtly different every time you run it.
+
 ## Tests
 
 Run the headless test suite (it runs under the dummy SDL drivers, no display
@@ -602,3 +754,9 @@ or audio required):
 ```bash
 pytest
 ```
+
+Audio is testable headlessly because the dummy SDL audio driver hands back a real
+mixer (44100Hz, signed 16-bit, mono), so the mixer-level tests assert real
+`set_volume` round-trips; the paths where the mixer *fails* are faked with an
+`AudioSystem` stand-in or a broken `pygame.mixer.init`. The waveform tests are pure
+arithmetic — see `src/audio_buffers.py`.
