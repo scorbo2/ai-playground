@@ -13,10 +13,10 @@ It turns out that Saturn was quite a few BIOS revisions out of date when the Hot
 review was filmed. The difference in performance numbers before/after the update to
 the latest BIOS version are shocking, so I've captured them here on this page.
 
-- [saturn-pre-bios-update-strata.md] - base Strata before the BIOS update
-- [saturn-pre-bios-update-hotrod.md] - Strata-HotRod before the BIOS update
-- [saturn-post-bios-update-strata.md] - base Strata after the BIOS update
-- [saturn-post-bios-update-hotrod.md] - Strata-HotRod after the BIOS update
+- [saturn-pre-bios-update-strata.md](saturn-pre-bios-update-strata.md) - base Strata before the BIOS update
+- [saturn-pre-bios-update-hotrod.md](saturn-pre-bios-update-hotrod.md) - Strata-HotRod before the BIOS update
+- [saturn-post-bios-update-strata.md](saturn-post-bios-update-strata.md) - base Strata after the BIOS update
+- [saturn-post-bios-update-hotrod.md](saturn-post-bios-update-hotrod.md) - Strata-HotRod after the BIOS update
 
 ## Titan
 
