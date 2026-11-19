@@ -22,5 +22,5 @@ the latest BIOS version are shocking, so I've captured them here on this page.
 
 Titan: RTX Pro 4000 24GB, Core 7 Ultra 270K, 128GB DDR5 (5600)
 
-- [Titan](titan-strata.md)
-- [Titan](titan-hotrod.md)
+- [Titan-strata.md](titan-strata.md) - base Strata
+- [Titan-hotrod.md](titan-hotrod.md) - Strata-HotRod
