@@ -8,6 +8,7 @@ from entities.asteroid import (
 from entities.fuel_pod import FuelPod, spawn_fuel_pod
 from entities.gravity_well import GravityWell
 from entities.mine import ShrapnelMine
+from entities.missile import HomingMissile, rank_targets_by_distance
 from entities.player import PlayerCraft, player_hits_asteroid
 from entities.powerup import (
     Powerup,
@@ -22,12 +23,14 @@ __all__ = [
     "CannonProjectile",
     "FuelPod",
     "GravityWell",
+    "HomingMissile",
     "PlayerCraft",
     "Powerup",
     "ShrapnelMine",
     "UFO",
     "player_hits_asteroid",
     "player_hits_ufo",
+    "rank_targets_by_distance",
     "spawn_drop_powerup",
     "spawn_fuel_pod",
     "spawn_level_asteroids",

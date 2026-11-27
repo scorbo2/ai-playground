@@ -9,11 +9,12 @@ of my evaluation of that model. Watch it on YouTube: https://www.youtube.com/wat
 
 You can find it in the parent directory: [SuperAsteroids2.md](../SuperAsteroids2.md)
 
-## Weapons (five, not four)
+## Weapons (six, not four)
 
-The spec ships four weapons; this build adds a fifth, **Gravity Wells**. Every
-weapon runs power levels 1-5, and picking up a matching powerup icon bumps the
-current weapon one level (a different type switches at power 1).
+The spec ships four weapons; this build adds **Gravity Wells** and **Homing
+Missiles**. Every weapon runs power levels 1-5, and picking up a matching
+powerup icon bumps the current weapon one level (a different type switches at
+power 1).
 
 | Weapon | Icon | What it does |
 | --- | --- | --- |
@@ -21,7 +22,8 @@ current weapon one level (a different type switches at power 1).
 | Laser | white **L** on light blue | a charged beam that stops at the first thing it touches |
 | Ramming shield | white **S** on red | a charged ring that destroys and bounces, and blocks enemy shots |
 | Shrapnel mines | white **M** on brown | one proximity-fused mine per press, 8-way shrapnel burst |
-| **Gravity wells** | white **G** on magenta | plants a singularity that drags the field into it |
+| Gravity wells | white **G** on magenta | plants a singularity that drags the field into it |
+| **Homing missiles** | white **H** on dodger blue | fire-and-forget rockets that hunt the nearest rock or saucer and detonate on it |
 
 ### Gravity wells, in play
 
@@ -72,15 +74,78 @@ Gotchas worth knowing:
   pull weaker than the stall threshold doesn't make them drift slowly, it makes
   them stand perfectly still - an invisible weapon.
 
+### Homing missiles, in play
+
+Space lights a rocket. It leaves from your tip carrying your velocity, locks
+onto the **nearest asteroid or UFO** (nearest is wrap-aware: the rock on the
+other side of the seam is the nearest one), and steers into it at *your* ship's
+rotation rate, acceleration, and top speed - the missile has no physics of its
+own to tune, it borrows yours. Whatever it touches dies outright: asteroids do
+**not** split, saucers pop, mines detonate, and the missile dies with them.
+
+| Level | Rockets per launch | Reload | Own-ship immunity |
+| --- | --- | --- | --- |
+| 1 | 1 | every 90 frames | no |
+| 2 | 1 | every 30 frames | no |
+| 3 | 2 (nearest + next-nearest) | every 30 frames | no |
+| 4 | 2 | every 15 frames | no |
+| 5 | 2 | every 15 frames | **yes - they pass through you** |
+
+All of it lives in `MISSILE_LEVEL_SPECS` in `game_constants.py`. The reload is
+the only press gate: there is **no in-play cap**, so a patient player can fill
+the field with ordnance. A two-rocket launch is one "Shot" and one sound; only
+the asteroids a missile kills count as "Hits".
+
+Gotchas worth knowing:
+
+- **they are hostile to you**. For 30 frames after launch a missile cannot touch
+  your ship; after that, catching up with your own rocket is an instant
+  `FRIENDLY FIRE!` game over. Level 5 is the only immunity, and it is keyed on
+  your *current* weapon: switch away and your old missiles get their teeth
+  back;
+- **you can shoot them down**, which is how you clean up after yourself: a
+  cannon shot (any level), the laser beam, a raised ramming shield, a mine (or
+  one of its shrapnel), or a gravity well's event horizon all kill a missile -
+  and a UFO bullet will do it for you. Nothing about a missile is immune to
+  gravity-well pull, either;
+- **a missile with a dead target re-locks**. If the rock it was chasing
+  explodes first, it takes the next nearest hazard the same way (ranked from
+  *your* ship, so two rockets can genuinely swap attention); if the field has
+  nothing left to hunt, it keeps burning in a straight line until the level
+  ends - unlimited fuel, unlimited range, no distance budget;
+- **missiles ignore each other** (they pass through), so a salvo does not
+  degenerate into a demolition derby of its own making;
+- a missile that clips a powerup icon or fuel pod destroys it (once the icon's
+  own grace period is spent) and scores nothing. Grab the icon before you
+  fire over there;
+- the missile body is light gray; **dodger blue is only the icon and the HUD**.
+  If you see a blue cylinder, that is a bug.
+
 ### Try one right now
 
 The `--debug` hotkeys spawn powerup icons anywhere on the field (never within
-200 px of the craft). `G` is the new one:
+200 px of the craft):
 
 ```bash
-python3 main.py --debug   # then press G in Game Mode, and Space to deploy
+python3 main.py --debug   # then press H in Game Mode, and Space to launch
 ```
 
-`C`/`L`/`S`/`M`/`G` spawn Cannon/Laser/Shield/Mines/Wells icons, `F` spawns a
-fuel pod, `U` spawns an enemy UFO.
+`C`/`L`/`S`/`M`/`G`/`H` spawn Cannon/Laser/Shield/Mines/Wells/Missile icons,
+`F` spawns a fuel pod, `U` spawns an enemy UFO.
+
+To see the friendly-fire rule the way it is meant to be seen: grab the `H`
+icon, hold still, fire, and then do not move for a second.
+
+## Tests
+
+The homing-missile rules (lock-on and re-lock, the reload cadence per power
+level, wrap-aware targeting, shoot-downs, friendly fire and the level-5
+immunity, scoring, and the shared thruster loop) are covered by a unit suite:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+It needs no window and no audio device (it asks SDL for the dummy drivers),
+only `pygame-ce`.
 
