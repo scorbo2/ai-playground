@@ -39,6 +39,7 @@ LIGHT_RED = (255, 127, 127)
 LIGHT_GRAY = (200, 200, 200)
 DARK_GRAY = (64, 64, 64)
 GRAY = (128, 128, 128)
+DODGER_BLUE = (30, 144, 255)   # homing missile icon/HUD blue
 ASTEROID_MIN_FILL = 72                         # 72,72,72  (random asteroid fills)
 ASTEROID_MAX_FILL = 152                        # 152,152,152
 FUEL_BAR_FG = (0, 255, 0)                      # bright green (same value as
@@ -332,6 +333,39 @@ GRAVITY_WELL_COLLAPSE_PARTICLE_COUNT = 40
 GRAVITY_WELL_COLLAPSE_SPEED_RANGE = (4.0, 9.0)  # px/frame, straight outward
 GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE = "CRUSHED BY YOUR OWN GRAVITY WELL!"
 
+# --------------------------------------------------------- homing missiles
+# The sixth weapon. Each PRESS launches the level's missile set from the
+# craft's tail; every missile locks onto the nearest asteroid/UFO to the
+# craft at launch (a dual launch takes nearest + next-nearest), turns
+# toward its target at the craft's rotation rate, and thrusts at the
+# craft's acceleration/max speed with the same thruster puffs. Missiles
+# have unlimited fuel and unlimited travel distance - they never expire,
+# never draw on the player's tank, and leave play at level advancement.
+#
+# Grace: 30 frames after launch during which the missile cannot impact
+# the craft. After grace, impact on the craft is "FRIENDLY FIRE!". Level 5
+# grants the player immunity to their own missiles (handled in the game
+# state, keyed on the CURRENT weapon - the mine and well perks work the
+# same way).
+MISSILE_LENGTH = 20                   # px, the capsule's long axis
+MISSILE_WIDTH = 6                     # px, the capsule's short axis
+MISSILE_RADIUS = 10                   # px bounding circle (half the length)
+MISSILE_COLOR = LIGHT_GRAY            # the capsule itself (NOT dodger blue)
+MISSILE_NOZZLE_COLOR = DARK_GRAY      # the thruster housing at the rear
+MISSILE_OUTLINE_WIDTH = 2
+MISSILE_GRACE = 30                    # frames of no craft impact
+# One row per power level (index = power_level - 1):
+#   (missiles per launch, launch delay frames).
+# Level 3 adds the dual launch; level 4 lowers the delay; level 5 keeps
+# level 4's cadence and adds the self-immunity perk.
+MISSILE_LEVEL_SPECS = (
+    (1, 90),
+    (1, 30),
+    (2, 30),
+    (2, 15),
+    (2, 15),
+)
+
 # ------------------------------------------------------------------ powerups
 POWERUP_RADIUS = 20                    # px
 POWERUP_SPEED = 2                      # px/frame drift
@@ -348,6 +382,9 @@ POWERUP_TYPES = (
     # Fifth weapon (not in the original spec's icon list): magenta circle,
     # white "G". The name matches GravityWells.NAME, as above.
     ("Gravity wells", GRAVITY_WELL_LABEL_COLOR, "G"),
+    # Sixth weapon (not in the original spec's icon list): dodger blue
+    # circle, white "H". The name matches HomingMissiles.NAME, as above.
+    ("Homing missiles", DODGER_BLUE, "H"),
 )
 POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
 POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}

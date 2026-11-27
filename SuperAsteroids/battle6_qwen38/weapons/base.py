@@ -54,11 +54,10 @@ class Weapon:
         """Space pressed. Returns True iff this was a SUCCESSFUL weapon
         activation (the state records exactly one shot for it).
 
-        ``active`` is the list of in-play objects that gate this press.
-        Projectile weapons are handed the projectile list (an in-flight cap
-        may apply); the shrapnel-mine weapon is handed the live-mine list,
-        because its cap is over MINES. Each weapon knows which it received
-        - the owning state selects it (see GameState._on_weapon_press)."""
+        ``active`` is what the owning state hands the weapon: the projectile
+        list (cannon), the live-mine list, the live-well list, or a
+        MissileLaunchContext (missiles). Each weapon knows which it received
+        - the owning state selects it (see GameState._press_target_list)."""
         return False
 
     def update(self, space_held: bool) -> None:

@@ -65,6 +65,19 @@ class Laser(ChargedWeapon):
         tip = PLAYER_SHAPE_HEIGHT / 2
         return (craft.x + tip * dir_x, craft.y + tip * dir_y, dir_x, dir_y)
 
+    def beam_samples(self, craft, width: int, height: int):
+        """Yield the wrap-aware (x, y) of each beam sample at
+        LASER_SAMPLE_STEP intervals - the same geography the draw and the
+        collision passes use, so the beam the player sees is the beam that
+        can hit things."""
+        x, y, dir_x, dir_y = self.beam_geometry(craft)
+        travelled = 0.0
+        while travelled < self.beam_length:
+            travelled += LASER_SAMPLE_STEP
+            x += LASER_SAMPLE_STEP * dir_x
+            y += LASER_SAMPLE_STEP * dir_y
+            yield wrap_around(x, y, 0.0, width, height)
+
     def draw(self, screen: pygame.Surface, craft) -> None:
         if not self.firing:
             return

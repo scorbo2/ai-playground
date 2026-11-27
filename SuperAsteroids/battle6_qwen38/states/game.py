@@ -73,6 +73,22 @@ Wells leave play at each level with every other transient object. Their two
 cues (activation, collapse) are synthesized in-repo because the arcade pack
 has nothing for "spacetime".
 
+Stage 12 (homing missiles): the sixth weapon. A space press launches the
+level's missile set (1 or 2, every 90/30/30/15/15 frames by power level)
+from the craft's tail; each missile locks onto the nearest asteroid/UFO to
+the CRAFT at launch (dual launches take nearest + next-nearest), then
+steers itself at the craft's rotation rate and thrusts continuously (same
+acceleration/max speed/puffs, unlimited fuel and travel distance, 30-frame
+launch grace, wraps the screen). If the target dies first, the missile
+re-locks onto the nearest live asteroid/UFO to itself. Impacts destroy the
+asteroid outright (no split, hit scored) or the UFO, and trigger the usual
+destruction animation; a missile also detonates mines, dies on the well
+core, and is shot down by cannon projectiles, laser beams, shield rings,
+mine burst shots, UFO projectiles and gravity-well pull. Grace-gated
+craft impact is "FRIENDLY FIRE!"; power 5 grants immunity (keyed on the
+current weapon). Missiles leave play at each level. The thruster loop
+plays while the craft is thrusting OR any missile is in play.
+
 Level intro (start of EVERY level, including level 1): "BEGIN LEVEL N"
 holds LEVEL_INTRO_HOLD frames, then fades over LEVEL_INTRO_FADE frames.
 During it - and while paused - the field is drawn frozen, the craft is
@@ -82,17 +98,21 @@ Frame order in the playing phase (matters for edge cases):
   1. movement: craft (emits thruster exhaust while it ACTUALLY thrusts -
      an empty fuel tank makes no exhaust), asteroids, player projectiles,
      UFOs (drift plus their cadence shots), UFO projectiles, powerup drift,
-     fuel pod drift, mine drift, mine projectile drift, gravity well
-     lifetime tick, then the cosmetic particle field advances and its faded
-     members are pruned
+     fuel pod drift, mine drift, mine projectile drift, homing missiles
+     (re-lock, steer, thrust, exhaust puffs), gravity well lifetime tick,
+     then the cosmetic particle field advances and its faded members are
+     pruned
   2. gravity wells bend the field: a velocity nudge toward the core for every
-     hazard (and the craft) inside each pull radius, plus the ambient infall
-     particles that make an invisible field legible
+     hazard (and the craft) inside each pull radius - missiles included
+     (spec: "homing missiles are not immune to gravity well pull") -
+     plus the ambient infall particles that make an invisible field legible
   3. spawn timers (powerup, then UFO), then weapon charge drain/recharge
-  4. player weapons vs. the world (projectiles, laser beam, shield ram) -
-     this is also where UFOs get destroyed by player weapons, where
-     powerup icons and fuel pods are destroyed out of grace, and where
-     player projectiles/laser/shield detonate mines on contact
+  4. player weapons vs. the world (projectiles, laser beam, shield ram,
+     homing missiles) - this is also where UFOs get destroyed by player
+     weapons, where powerup icons and fuel pods are destroyed out of grace,
+     and where player projectiles/laser/shield/missiles detonate mines on
+     contact; missiles additionally destroy asteroids outright (scored) and
+     die on gravity well cores
   5. mine interactions: contact detonations (UFO, craft, projectile,
      asteroid), proximity activation (150px, latching), fuse expiry
   6. gravity well contacts: crush-core consumption (craft, asteroids, UFOs,
@@ -126,7 +146,9 @@ from entities.powerup import (Powerup, spawn_drop_powerup,
 from effects.particles import (spawn_destruction_explosion,
                                spawn_gravity_well_collapse,
                                spawn_gravity_well_infall,
-                               spawn_mine_detonation, spawn_split_explosion,
+                               spawn_mine_detonation,
+                               spawn_missile_thruster_puffs,
+                               spawn_split_explosion,
                                spawn_thruster_puffs, spawn_ufo_explosion)
 from font_manager import render_text
 from game_constants import (
@@ -146,7 +168,6 @@ from game_constants import (
     GRAVITY_WELL_SELF_IMMUNE_POWER,
     HEADING_FONT_SIZE,
     HOSTILE_FIRE_MESSAGE,
-    LASER_SAMPLE_STEP,
     LEVEL_1_ASTEROID_COUNT,
     LEVEL_ASTEROID_COUNT_INCREMENT,
     LEVEL_INTRO_FADE,
@@ -165,7 +186,7 @@ from game_constants import (
     WHITE,
 )
 from hud import HudData, draw_game_hud
-from position_utils import shortest_delta, torus_distance, wrap_around
+from position_utils import shortest_delta, torus_distance
 from score import ScoreTracker
 from sound import (
     SFX_ASTEROID_DESTROYED,
@@ -177,6 +198,7 @@ from sound import (
     SFX_MINE_ACTIVATED,
     SFX_MINE_DETONATE,
     SFX_MINE_PULSE,
+    SFX_MISSILE_LAUNCH,
     SFX_POWERUP_COLLECTED,
     SFX_POWERUP_DESTROYED,
     SFX_POWERUP_SPAWN,
@@ -187,8 +209,9 @@ from sound import (
     SFX_UFO_DESTROYED,
 )
 from states.base import GameModeState
-from weapons import (Cannon, ChargedWeapon, GravityWells, Laser,
-                     RammingShield, ShrapnelMines, make_weapon)
+from weapons import (Cannon, ChargedWeapon, GravityWells, HomingMissiles,
+                     Laser, RammingShield, ShrapnelMines, make_weapon)
+from weapons.missile import MissileLaunchContext
 
 
 def _add_velocity_and_clamp(obj, dvx: float, dvy: float,
@@ -238,6 +261,10 @@ class GameState(GameModeState):
         self._ufo_projectiles: list = []
         self._mines: list = []
         self._mine_projectiles: list = []
+        # Homing missiles (the sixth weapon) ride their own list, exactly
+        # like mines: the launch cadence is per weapon, not per missile,
+        # and the objects they fly toward are everybody else's.
+        self._missiles: list = []
         # Gravity wells (the fifth weapon) ride their own list, exactly like
         # mines: the press-time cap is over live WELLS, and the objects they
         # shove are everybody else's.
@@ -305,6 +332,7 @@ class GameState(GameModeState):
         self._ufo_projectiles = []
         self._mines = []
         self._mine_projectiles = []
+        self._missiles = []
         self._wells = []
         self._powerups = []
         self._fuel_pods = []
@@ -377,6 +405,10 @@ class GameState(GameModeState):
             return self._mines
         if isinstance(self._weapon, GravityWells):
             return self._wells
+        if isinstance(self._weapon, HomingMissiles):
+            width, height = self.app.screen.get_size()
+            return MissileLaunchContext(
+                self._missiles, self._asteroids, self._ufos, width, height)
         return self._projectiles
 
     def _play_weapon_activation_sound(self) -> None:
@@ -391,6 +423,10 @@ class GameState(GameModeState):
             name = SFX_SHIELD_ACTIVATED
         elif isinstance(self._weapon, GravityWells):
             name = SFX_GRAVITY_WELL_ACTIVATED
+        elif isinstance(self._weapon, HomingMissiles):
+            # One launch cue per press, even for dual launches (spec:
+            # Homing Missiles - don't play the effect twice per launch).
+            name = SFX_MISSILE_LAUNCH
         else:
             # The mine weapon has no activation cue of its own: its sounds
             # are the pulse/arm/detonate events the mines themselves make.
@@ -411,6 +447,8 @@ class GameState(GameModeState):
             self._spawn_debug_powerup("Shrapnel mines")
         elif key == pygame.K_g:
             self._spawn_debug_powerup("Gravity wells")
+        elif key == pygame.K_h:
+            self._spawn_debug_powerup("Homing missiles")
         elif key == pygame.K_f:
             self._spawn_debug_fuel_pod()
         elif key == pygame.K_u:
@@ -523,6 +561,12 @@ class GameState(GameModeState):
                 break  # one pulse sound per frame is plenty
         for projectile in self._mine_projectiles:
             projectile.update(width, height)
+        for missile in self._missiles:
+            self._relock_missile(missile, width, height)
+            missile.update(width, height)
+            # Exhaust, exactly like the craft's puffs (spec: Thrusters):
+            # the missile is always thrusting, so it ejects every frame.
+            self._particles.extend(spawn_missile_thruster_puffs(missile))
         for well in self._wells:
             # Lifetime tick + vortex spin. The collapse itself waits for the
             # contact pass below, so a well that dies this frame still gets
@@ -602,7 +646,9 @@ class GameState(GameModeState):
         wanted: set = set()
         if self._ufos:
             wanted.add(SFX_UFO)
-        if thrusting:
+        # The thruster loop runs while EITHER the craft is thrusting OR any
+        # homing missile is in play (missiles always burn, spec: Sound).
+        if thrusting or self._missiles:
             wanted.add(SFX_THRUSTERS)
         self.app.sound.set_active_loops(frozenset(wanted))
 
@@ -615,6 +661,8 @@ class GameState(GameModeState):
             return False
         self._resolve_laser_hits(width, height)
         self._resolve_shield_hits(width, height)
+        if not self._resolve_missile_hits(width, height):
+            return False
         return True
 
     def _resolve_projectile_hits(self, width: int, height: int) -> bool:
@@ -700,13 +748,7 @@ class GameState(GameModeState):
         weapon = self._weapon
         if not isinstance(weapon, Laser) or not weapon.firing:
             return
-        x, y, dir_x, dir_y = weapon.beam_geometry(self._craft)
-        travelled = 0.0
-        while travelled < weapon.beam_length:
-            travelled += LASER_SAMPLE_STEP
-            x += LASER_SAMPLE_STEP * dir_x
-            y += LASER_SAMPLE_STEP * dir_y
-            sx, sy = wrap_around(x, y, 0.0, width, height)
+        for sx, sy in weapon.beam_samples(self._craft, width, height):
             # Asteroids before powerups at the same sample: a rock is the
             # harder target and gets the impact event.
             asteroid = next(
@@ -870,6 +912,166 @@ class GameState(GameModeState):
                     dx, dy, mine.radius / weapon.bounce_divisor)
                 return True
         return False
+
+    # ------------------------------------------------------------- missiles
+
+    def _relock_missile(self, missile, width: int, height: int) -> None:
+        """Re-lock a missile whose target died (or has no target) onto the
+        nearest live asteroid/UFO to the MISSILE - the homing entity -
+        wrap-aware. The launch lock was nearest-to-the-CRAFT (spec); the
+        re-lock follows the missile itself, so a flying missile keeps
+        flying forward instead of swinging back toward the player's spot.
+        """
+        target = missile.target
+        if target is not None and (target in self._asteroids
+                                   or target in self._ufos):
+            return
+        missile.relock(self._asteroids, self._ufos, width, height)
+
+    def _beam_hits_missile(self, missile, width: int, height: int) -> bool:
+        """True iff the live laser beam samples the missile's bounding
+        circle - the same beam geography the laser pass uses (shared
+        generator), so what the player sees is what can kill a missile."""
+        weapon = self._weapon
+        if not isinstance(weapon, Laser) or not weapon.firing:
+            return False
+        for sx, sy in weapon.beam_samples(self._craft, width, height):
+            if torus_distance(sx, sy, missile.x, missile.y,
+                              width, height) <= missile.radius:
+                return True
+        return False
+
+    def _resolve_missile_hits(self, width: int, height: int) -> bool:
+        """Homing missiles vs. the world (spec: Homing Missiles).
+
+        One dedicated pass arbitrates the whole matrix (projectile/laser/
+        shield interactions included, because the missile is the only
+        player object that can be destroyed by the OTHER weapons):
+          - the craft: grace-gated friendly fire ("FRIENDLY FIRE!");
+            level-5 perk: own missiles pass through harmlessly;
+          - asteroid: destroyed outright (no split), hit scored, the usual
+            destruction animation;
+          - UFO: destroyed, no hit scored;
+          - powerup icon / fuel pod: destroyed out of grace, no hit scored;
+          - shrapnel mine: detonates (burst lands in the mine projectile
+            list);
+          - gravity well crush core: the missile dies, the well is
+            unaffected;
+          - player cannon projectile: both destroyed;
+          - laser beam: the beam deactivates, the missile dies;
+          - ramming shield ring: absorbed, no bounce;
+          - mine burst projectile: both destroyed;
+          - UFO projectile: both destroyed.
+
+        Missiles pass through other missiles (no interaction, spec).
+        Returns False iff friendly fire took us to Game Over.
+        """
+        if not self._missiles:
+            return True
+        shield_up = (isinstance(self._weapon, RammingShield)
+                     and self._weapon.firing)
+        shield_radius = self._weapon.shield_radius if shield_up else 0.0
+        # The power-5 perk, keyed on the CURRENT weapon - switching weapons
+        # hands the missiles their teeth back (the mine/well perks work
+        # the same way).
+        self_immune = (isinstance(self._weapon, HomingMissiles)
+                       and self._weapon.power() >= 5)
+        surviving = []
+        for missile in self._missiles:
+            # -- Friendly fire (grace-gated) --
+            if (not missile.in_grace and not self_immune
+                    and missile.touching(self._craft.x, self._craft.y,
+                                         PLAYER_RADIUS, width, height)):
+                self.app.to_game_over(FRIENDLY_FIRE_MESSAGE)
+                return False
+            # -- Asteroid: outright destruction + score --
+            asteroid = next(
+                (a for a in self._asteroids
+                 if missile.touching(a.x, a.y, a.radius, width, height)),
+                None,
+            )
+            if asteroid is not None:
+                self._asteroids.remove(asteroid)
+                self._asteroids.extend(self._apply_asteroid_impact(
+                    asteroid, score=True, destroy_outright=True,
+                    impact_point=(missile.x, missile.y)))
+                continue
+            # -- UFO: destroyed, no score --
+            ufo = next(
+                (u for u in self._ufos
+                 if missile.touching(u.x, u.y, u.radius, width, height)),
+                None,
+            )
+            if ufo is not None:
+                self._destroy_ufo(ufo)
+                continue
+            # -- Drop (icon/pod): out of grace only, no score --
+            drop = next(
+                (p for p in self._drops
+                 if not p.in_grace
+                 and missile.touching(p.x, p.y, p.radius, width, height)),
+                None,
+            )
+            if drop is not None:
+                self._destroy_drop(drop)
+                continue
+            # -- Mine: detonates --
+            mine = next(
+                (m for m in self._mines
+                 if missile.touching(m.x, m.y, m.radius, width, height)),
+                None,
+            )
+            if mine is not None:
+                self._mine_projectiles.extend(self._detonate_mine(mine))
+                continue
+            # -- Gravity well core: the well is unaffected --
+            well = next(
+                (w for w in self._wells
+                 if w.touching(missile.x, missile.y, missile.radius,
+                               width, height)),
+                None,
+            )
+            if well is not None:
+                continue
+            # -- Player cannon projectile: both destroyed --
+            projectile = next(
+                (p for p in self._projectiles
+                 if missile.touching(p.x, p.y, p.half_size, width, height)),
+                None,
+            )
+            if projectile is not None:
+                self._projectiles.remove(projectile)
+                continue
+            # -- Laser beam: the beam deactivates --
+            if self._beam_hits_missile(missile, width, height):
+                self._weapon.deactivate_after_hit()
+                continue
+            # -- Shield ring: absorbed (no bounce) --
+            if shield_up and torus_distance(
+                    missile.x, missile.y, self._craft.x, self._craft.y,
+                    width, height) <= shield_radius + missile.radius:
+                continue
+            # -- Mine burst projectile: both destroyed --
+            mine_proj = next(
+                (p for p in self._mine_projectiles
+                 if missile.touching(p.x, p.y, p.half_size, width, height)),
+                None,
+            )
+            if mine_proj is not None:
+                self._mine_projectiles.remove(mine_proj)
+                continue
+            # -- UFO projectile: both destroyed --
+            ufo_proj = next(
+                (p for p in self._ufo_projectiles
+                 if missile.touching(p.x, p.y, p.half_size, width, height)),
+                None,
+            )
+            if ufo_proj is not None:
+                self._ufo_projectiles.remove(ufo_proj)
+                continue
+            surviving.append(missile)
+        self._missiles = surviving
+        return True
 
     # ---------------------------------------------------------------- mines
 
@@ -1147,6 +1349,10 @@ class GameState(GameModeState):
             for mine in self._mines:
                 self._well_pulls(well, mine, mine.radius,
                                  GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+            # Missiles are deliberately NOT immune to the pull (spec).
+            for missile in self._missiles:
+                self._well_pulls(well, missile, missile.radius,
+                                 GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
             for ufo in self._ufos:
                 # A UFO has no velocity of its own (it drifts at the spec's
                 # constant 2 px/frame), so the field pushes it instead.
@@ -1293,6 +1499,9 @@ class GameState(GameModeState):
                              GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
         for mine in self._mines:
             self._well_kicks(well, mine, mine.radius,
+                             GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
+        for missile in self._missiles:
+            self._well_kicks(well, missile, missile.radius,
                              GRAVITY_WELL_MAX_PULLED_SPEED, width, height)
         for ufo in self._ufos:
             if well.within_pull_radius(ufo.x, ufo.y, ufo.radius,
@@ -1615,6 +1824,8 @@ class GameState(GameModeState):
                 mine.draw(screen)
             for projectile in self._mine_projectiles:
                 projectile.draw(screen)
+            for missile in self._missiles:
+                missile.draw(screen)
             for well in self._wells:
                 well.draw(screen)
             # Debris and exhaust over the field, under the craft and beam:

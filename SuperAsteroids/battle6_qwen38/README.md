@@ -22,6 +22,7 @@ current weapon one level (a different type switches at power 1).
 | Ramming shield | white **S** on red | a charged ring that destroys and bounces, and blocks enemy shots |
 | Shrapnel mines | white **M** on brown | one proximity-fused mine per press, 8-way shrapnel burst |
 | **Gravity wells** | white **G** on magenta | plants a singularity that drags the field into it |
+| **Homing missiles** | white **H** on dodger blue | fire-and-forget missiles that lock on and fly themselves into targets |
 
 ### Gravity wells, in play
 
@@ -72,15 +73,46 @@ Gotchas worth knowing:
   pull weaker than the stall threshold doesn't make them drift slowly, it makes
   them stand perfectly still - an invisible weapon.
 
+### Homing missiles, in play
+
+Space launches the level's missile set from the craft's tail. Every missile
+locks onto the asteroid or UFO nearest the craft at launch (dual launches take
+nearest + next-nearest; they may both lock onto the same object if only one
+exists), turns toward its target at the craft's rotation rate, and thrusts
+continuously at the craft's acceleration/max speed - with the same thruster
+puffs. If the locked target dies first, the missile re-locks onto the nearest
+live asteroid or UFO to itself (torus distance). Missiles have unlimited fuel
+and unlimited travel distance, never expire, wrap the screen, and leave play
+when the level ends.
+
+| Level | Missiles per launch | Launch cadence | Notes |
+| --- | --- | --- | --- |
+| 1 | 1 | every 90 frames | |
+| 2 | 1 | every 30 frames | |
+| 3 | 2 | every 30 frames | dual launch, one "shot" for scoring |
+| 4 | 2 | every 15 frames | |
+| 5 | 2 | every 15 frames | player gains immunity to their own missiles |
+
+Missiles have a 30-frame launch grace (no impact with the craft); after grace,
+a missile impact on the craft is an immediate "FRIENDLY FIRE!" game over.
+Impacts destroy the asteroid outright (no split) or the UFO - the usual
+destruction animation fires - and asteroid hits count as "hits" (a dual
+launch is one "shot"). Missiles are shot down by cannon projectiles, laser
+beams, the shield ring, mine burst shots, UFO projectiles, and gravity well
+cores (the well is unaffected), and they are NOT immune to gravity well pull.
+They pass through each other and through the player's own craft (level 5).
+`sfx/missile_launch.wav` plays once per launch; the thruster loop runs while
+the craft or any missile is thrusting.
+
 ### Try one right now
 
 The `--debug` hotkeys spawn powerup icons anywhere on the field (never within
-200 px of the craft). `G` is the new one:
+200 px of the craft). `G` is the gravity-well one and `H` is the missile one:
 
 ```bash
-python3 main.py --debug   # then press G in Game Mode, and Space to deploy
+python3 main.py --debug   # then press H in Game Mode, and Space to launch
 ```
 
-`C`/`L`/`S`/`M`/`G` spawn Cannon/Laser/Shield/Mines/Wells icons, `F` spawns a
-fuel pod, `U` spawns an enemy UFO.
+`C`/`L`/`S`/`M`/`G`/`H` spawn Cannon/Laser/Shield/Mines/Wells/Homing-missile
+icons, `F` spawns a fuel pod, `U` spawns an enemy UFO.
 

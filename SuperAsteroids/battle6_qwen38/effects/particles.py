@@ -26,6 +26,7 @@ from game_constants import (
     LIGHT_RED,
     MINE_DETONATION_COLOR,
     MINE_DETONATION_PARTICLE_COUNT,
+    MISSILE_LENGTH,
     PARTICLE_ALPHA_DECAY_RANGE,
     PARTICLE_COUNT_PER_RADIUS,
     PARTICLE_SIZE,
@@ -220,6 +221,28 @@ def spawn_gravity_well_collapse(well) -> list:
             well.x, well.y, angle,
             random.uniform(*GRAVITY_WELL_COLLAPSE_SPEED_RANGE), well.color))
     return particles
+
+
+def spawn_missile_thruster_puffs(missile) -> list:
+    """One thrusting frame of exhaust for a homing missile (spec: Thrusters):
+    the same visual effects as the craft's puffs - identical count, radius,
+    back-speed, alpha decay, and colors - emitted from the missile's rear."""
+    angle = math.radians(missile.angle)
+    back_x, back_y = -math.cos(angle), -math.sin(angle)
+    base_offset = MISSILE_LENGTH / 2
+    puffs = []
+    for _ in range(random.randint(*THRUSTER_PUFFS_PER_FRAME_RANGE)):
+        back_speed = random.uniform(*THRUSTER_BACK_SPEED_RANGE)
+        puffs.append(ThrusterPuff(
+            x=missile.x + back_x * base_offset,
+            y=missile.y + back_y * base_offset,
+            vx=missile.vx + back_x * back_speed,
+            vy=missile.vy + back_y * back_speed,
+            color=random.choice(THRUSTER_COLORS),
+            decay_fraction=random.uniform(*THRUSTER_ALPHA_DECAY_RANGE),
+            radius=random.randint(*THRUSTER_PUFF_RADIUS_RANGE),
+        ))
+    return puffs
 
 
 def spawn_thruster_puffs(craft) -> list:
