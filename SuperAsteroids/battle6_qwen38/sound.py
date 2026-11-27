@@ -13,7 +13,8 @@ Per the spec (SuperAsteroids2.md -> "Sound"):
 
 Loop discipline: the game state calls ``set_active_loops()`` with the set
 of loops that should be audible right now (the thruster loop while the Up
-key drives thrust, and the UFO loop while at least one UFO is active). The
+key drives thrust OR while any homing missile is burning, and the UFO loop
+while at least one UFO is active). The
 mine-pulse sound is NOT a loop - it is a one-shot that fires once every
 120 frames while at least one unactivated mine is "scanning" for a target
 (the game state plays it as a discrete event). The app clears the set on
@@ -56,6 +57,10 @@ SFX_MINE_DETONATE = "mine_detonate"
 # power level; the second cue marks the well reaching the end of its life.
 SFX_GRAVITY_WELL_ACTIVATED = "gravity_well_activated"
 SFX_GRAVITY_WELL_COLLAPSED = "gravity_well_collapsed"
+# The sixth weapon's launch cue. One cue per LAUNCH, not per rocket: a
+# power-3+ salvo of two missiles is one press, one shot, one sound (and a
+# missile being shot down has no cue at all - see game_constants).
+SFX_MISSILE_LAUNCH = "missile_launch"
 SFX_UFO = "ufo"
 SFX_UFO_DESTROYED = "ufo_destroyed"
 SFX_THRUSTERS = "thrusters"
@@ -84,6 +89,7 @@ ALL_SOUNDS = (
     SFX_MINE_DETONATE,
     SFX_GRAVITY_WELL_ACTIVATED,
     SFX_GRAVITY_WELL_COLLAPSED,
+    SFX_MISSILE_LAUNCH,
     SFX_UFO,
     SFX_UFO_DESTROYED,
     SFX_THRUSTERS,

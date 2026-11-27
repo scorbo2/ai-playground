@@ -222,22 +222,33 @@ def spawn_gravity_well_collapse(well) -> list:
     return particles
 
 
-def spawn_thruster_puffs(craft) -> list:
+def spawn_thruster_puffs(launcher,
+                         back_offset: float = PLAYER_SHAPE_HEIGHT / 2) -> list:
     """One thrusting frame of exhaust (spec: Thrusters): a random 2-3
-    circles at the craft's BASE (half its height aft of center), each with
-    the craft's velocity plus a random 6-10 px/frame kick BACKWARDS along
-    the craft's facing direction (no lateral spread - the spec gives none)."""
-    angle = math.radians(craft.angle)
+    circles at the launcher's BASE (``back_offset`` aft of its center), each
+    with the launcher's velocity plus a random 6-10 px/frame kick BACKWARDS
+    along its facing direction (no lateral spread - the spec gives none).
+
+    ``launcher`` is anything with x/y/vx/vy/angle, because the homing missile
+    spec asks for "the same visual effects ... as the player's ship" - and
+    reusing the one factory is how "the same" stays true instead of drifting
+    the moment someone tweaks the craft's exhaust.
+
+    ``back_offset`` is the one thing that differs between launchers: the tail
+    of the thing doing the thrusting. It defaults to the craft's base (half
+    its height) and the missile passes half its own length, so neither rocket
+    appears to be venting from its own cockpit.
+    """
+    angle = math.radians(launcher.angle)
     back_x, back_y = -math.cos(angle), -math.sin(angle)   # "backwards"
-    base_offset = PLAYER_SHAPE_HEIGHT / 2
     puffs = []
     for _ in range(random.randint(*THRUSTER_PUFFS_PER_FRAME_RANGE)):
         back_speed = random.uniform(*THRUSTER_BACK_SPEED_RANGE)
         puffs.append(ThrusterPuff(
-            x=craft.x + back_x * base_offset,
-            y=craft.y + back_y * base_offset,
-            vx=craft.vx + back_x * back_speed,
-            vy=craft.vy + back_y * back_speed,
+            x=launcher.x + back_x * back_offset,
+            y=launcher.y + back_y * back_offset,
+            vx=launcher.vx + back_x * back_speed,
+            vy=launcher.vy + back_y * back_speed,
             color=random.choice(THRUSTER_COLORS),
             decay_fraction=random.uniform(*THRUSTER_ALPHA_DECAY_RANGE),
             radius=random.randint(*THRUSTER_PUFF_RADIUS_RANGE),

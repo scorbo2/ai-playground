@@ -1,7 +1,8 @@
 """Player weapons.
 
-All five weapons (Cannon, Laser, Ramming Shield, Shrapnel Mines, Gravity
-Wells) are live, with power levels 1-5 driven by powerup pickups.
+All six weapons (Cannon, Laser, Ramming Shield, Shrapnel Mines, Gravity
+Wells, Homing Missiles) are live, with power levels 1-5 driven by powerup
+pickups.
 ``make_weapon`` materializes a weapon from its spec name (what powerup icons
 carry).
 """
@@ -11,12 +12,14 @@ from weapons.cannon import Cannon
 from weapons.gravity_well import GravityWells
 from weapons.laser import Laser
 from weapons.mine import ShrapnelMines
+from weapons.missiles import HomingMissiles
 from weapons.shield import RammingShield
 
 __all__ = [
     "Cannon",
     "ChargedWeapon",
     "GravityWells",
+    "HomingMissiles",
     "Laser",
     "RammingShield",
     "ShrapnelMines",
@@ -33,6 +36,7 @@ _WEAPONS = {
     RammingShield.NAME: RammingShield,
     ShrapnelMines.NAME: ShrapnelMines,
     GravityWells.NAME: GravityWells,
+    HomingMissiles.NAME: HomingMissiles,
 }
 
 

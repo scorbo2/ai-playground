@@ -33,6 +33,7 @@ YELLOW = (255, 255, 0)
 ORANGE = (255, 165, 0)
 BROWN = (139, 69, 19)
 LIGHT_BLUE = (173, 216, 230)
+DODGER_BLUE = (30, 144, 255)             # homing missile HUD + powerup icon
 CYAN = (0, 255, 255)
 MAGENTA = (255, 0, 255)
 LIGHT_RED = (255, 127, 127)
@@ -332,6 +333,88 @@ GRAVITY_WELL_COLLAPSE_PARTICLE_COUNT = 40
 GRAVITY_WELL_COLLAPSE_SPEED_RANGE = (4.0, 9.0)  # px/frame, straight outward
 GRAVITY_WELL_FRIENDLY_FIRE_MESSAGE = "CRUSHED BY YOUR OWN GRAVITY WELL!"
 
+# ----------------------------------------------------------- homing missiles
+# The sixth weapon: a rocket you fire and forget. One press launches one (or,
+# from level 3, two) light gray cylinder(s) from the craft's tip; each one
+# locks onto the nearest asteroid or UFO (wrap-aware, see
+# entities/missile.rank_targets_by_distance) and steers into it. Anything it
+# touches dies outright - a missile is a warhead, so the usual asteroid split
+# rules are skipped, and the rock is destroyed whole.
+#
+# The flight law is deliberately the CRAFT's, not a new one: the spec gives
+# the missile "the same ... acceleration/max speed characteristics as the
+# player's ship" and "the same rotation rate", so MISSILE thrust reuses
+# PLAYER_ACCELERATION / PLAYER_MAX_SPEED and MISSILE steering reuses
+# PLAYER_ROTATION_SPEED. Nothing here duplicates those numbers; the missile
+# entity imports them. Tuning the craft's flight model therefore re-tunes the
+# missile weapon on purpose.
+#
+# Contracts worth knowing before tuning anything here:
+#   - UNLIMITED FUEL AND RANGE: a missile never runs dry (it never touches
+#     the craft's tank) and never expires on distance the way a cannon shot
+#     does. It leaves play only by hitting something, being shot down, or the
+#     end of the level;
+#   - a missile ALWAYS thrusts (see entities/missile.py). That is what makes
+#     the thruster SFX refactor necessary: the loop now runs while the craft
+#     thrusts OR any missile thrusts;
+#   - NO IN-PLAY CAP, only a reload cadence. The press gate is the per-level
+#     RELOAD below, not a count of live missiles - so a blocked press is a
+#     press inside the reload window, and (like every other blocked
+#     activation) it scores no shot and plays no sound;
+#   - missiles are NOT immune to gravity-well pull, and their own crush cores
+#     shoot them down like any other hazard;
+#   - missiles pass through EACH OTHER (they never engage a sibling), and
+#     below power 5 through nothing else: a missile that comes back around
+#     onto the ship that fired it is a FRIENDLY FIRE game over.
+#
+# Geometry. The drawn silhouette is exactly MISSILE_LENGTH x MISSILE_WIDTH
+# (a 20x6 cylinder with a chamfered nose so the heading is legible); the
+# bounding circle used for EVERY collision check is MISSILE_RADIUS, half the
+# length - the same "bounding circle, not exact shape" rule the craft and
+# the UFOs live by.
+MISSILE_LENGTH = 20                      # px, nose to tail
+MISSILE_WIDTH = 6                        # px, across
+MISSILE_RADIUS = 10                      # px, bounding circle for collisions
+MISSILE_BODY_COLOR = LIGHT_GRAY          # spec: the missile itself is light
+                                         # gray - DODGER_BLUE belongs to the
+                                         # icon and the HUD, never the body
+MISSILE_OUTLINE_COLOR = WHITE
+# Frames after launch during which a missile cannot hit its own craft (the
+# spec's grace period; it impacts everything else from frame one).
+MISSILE_SELF_GRACE = 30
+# A two-missile salvo is launched side by side rather than exactly on top of
+# itself, so a level-3 press is visibly two rockets. Purely cosmetic: every
+# lock is chosen by the state's targeting pass, never by spawn position.
+MISSILE_SALVO_LATERAL_OFFSET = 6         # px, each side of the craft's axis
+# HUD label + powerup icon color, named so POWERUP_TYPES and HomingMissiles
+# .LABEL_COLOR can never drift apart (same trick as GRAVITY_WELL_LABEL_COLOR).
+MISSILE_LABEL_COLOR = DODGER_BLUE
+# Power level at which the player becomes immune to their OWN missiles (they
+# pass through the craft harmlessly). Keyed on the CURRENT weapon, exactly
+# like the mine and gravity-well level-5 perks: switching weapons hands the
+# old missiles their teeth back.
+MISSILE_SELF_IMMUNE_POWER = 5
+# One row per power level (index = power_level - 1):
+#   (missiles per launch, reload frames between launches).
+# The cadence is the ONLY press gate, and it is counted in frames of ACTIVE
+# play (the weapon's update() never runs during the level intro or a pause).
+# Level 3 buys a second rocket for the same 30-frame cadence - the pair locks
+# onto the nearest and the next-nearest hazards - and level 4 halves the wait.
+# Level 5 keeps level 4's cadence and adds the self-immunity perk above.
+MISSILE_LEVEL_SPECS = (
+    (1, 90),
+    (1, 30),
+    (2, 30),
+    (2, 15),
+    (2, 15),
+)
+# A missile shot down by the player's own cannon/laser/shield/mine blast, by
+# an enemy bullet, or by a gravity well makes NO sound: sfx/README.md defines
+# no "missile destroyed" cue, and inventing one would put an unexplained
+# sample in the pack. It does scatter a little light-gray wreckage (see
+# effects.particles.spawn_destruction_explosion) so an interception is at
+# least visible.
+
 # ------------------------------------------------------------------ powerups
 POWERUP_RADIUS = 20                    # px
 POWERUP_SPEED = 2                      # px/frame drift
@@ -348,6 +431,9 @@ POWERUP_TYPES = (
     # Fifth weapon (not in the original spec's icon list): magenta circle,
     # white "G". The name matches GravityWells.NAME, as above.
     ("Gravity wells", GRAVITY_WELL_LABEL_COLOR, "G"),
+    # Sixth weapon: dodger blue circle, white "H". The name matches
+    # HomingMissiles.NAME, as above.
+    ("Homing missiles", MISSILE_LABEL_COLOR, "H"),
 )
 POWERUP_COLORS = {name: color for name, color, _letter in POWERUP_TYPES}
 POWERUP_LETTERS = {name: letter for name, _color, letter in POWERUP_TYPES}
@@ -420,9 +506,9 @@ UFO_PROJECTILE_DISTANCE = 500          # half of the player's level 1 range
 HOSTILE_FIRE_MESSAGE = "HOSTILE FIRE!"
 
 # -------------------------------------------------------------------- debug
-# --debug hotkeys: C/L/S/M/G spawn a powerup of that type (no cap), F spawns a
-# fuel pod (no cap), U spawns a UFO if under the active cap. Spawned powerup
-# and pod positions avoid the craft's safe distance.
+# --debug hotkeys: C/L/S/M/G/H spawn a powerup of that type (no cap), F
+# spawns a fuel pod (no cap), U spawns a UFO if under the active cap. Spawned
+# powerup and pod positions avoid the craft's safe distance.
 DEBUG_SPAWN_ATTEMPTS = 50
 
 # -------------------------------------------------------------- level intro

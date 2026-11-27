@@ -28,6 +28,7 @@ These aren't mine! All credit goes to https://ci.itch.io/arcade-sound-effects-pa
 |animal\_bird\_tweet|mine\_activated|A mine has been activated|
 |collect\_7|mine\_pulse|A non-activated mine "pulses" (scanning for targets)|
 |explosion\_4|mine\_detonate|A mine detonates|
+|wobble|missile\_launch|A homing missile is launched|
 
 ## The gravity well cues (added with the fifth weapon)
 
