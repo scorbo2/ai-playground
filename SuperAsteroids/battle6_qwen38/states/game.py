@@ -694,7 +694,7 @@ class GameState(GameModeState):
         wanted: set = set()
         if self._ufos:
             wanted.add(SFX_UFO)
-        if craft_thrusting or any(m.thrusting for m in self._missiles):
+        if craft_thrusting or self._missiles:
             wanted.add(SFX_THRUSTERS)
         self.app.sound.set_active_loops(frozenset(wanted))
 
